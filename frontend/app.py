@@ -1,555 +1,931 @@
 """
-Medico.AI — Streamlit Frontend
-Run: streamlit run frontend/app.py
+Medico.AI frontend.
+
+This keeps the project frontend as Streamlit/Python while rendering the provided
+HTML design directly for a closer visual match.
 """
 from __future__ import annotations
 
-import io
 import os
-import sys
+from textwrap import dedent
 
-import requests
-import pandas as pd
 import streamlit as st
-from PIL import Image
+import streamlit.components.v1 as components
 
-# ── Page config ──────────────────────────────────────────────────────────────
+
 st.set_page_config(
-    page_title="Medico.AI — Smart Medicine Cost Optimizer",
+    page_title="Medico.AI - Save on Medicines",
     page_icon="💊",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
 
-# ── Backend URL ──────────────────────────────────────────────────────────────
 API_BASE = os.getenv("MEDICO_API_URL", "http://localhost:8000/api/v1")
+HEALTH_URL = os.getenv("MEDICO_HEALTH_URL", "http://localhost:8000/health")
 
-# ── Custom CSS ───────────────────────────────────────────────────────────────
 st.markdown(
     """
 <style>
-/* Global */
-body { font-family: 'Segoe UI', sans-serif; }
-
-/* Hero banner */
-.hero {
-    background: linear-gradient(135deg, #1a6b3c 0%, #0d4a2a 100%);
-    color: white;
-    padding: 2rem 2.5rem;
-    border-radius: 16px;
-    margin-bottom: 1.5rem;
-    text-align: center;
+html, body, .stApp {
+  margin: 0 !important;
+  padding: 0 !important;
+  background: #F7F9FC !important;
 }
-.hero h1 { font-size: 2.8rem; margin: 0; }
-.hero p  { font-size: 1.1rem; margin-top: 0.5rem; opacity: 0.9; }
-
-/* Metric cards */
-.metric-card {
-    background: #f0faf4;
-    border: 1px solid #b2dfcb;
-    border-radius: 12px;
-    padding: 1rem 1.5rem;
-    text-align: center;
+.block-container {
+  max-width: none !important;
+  padding: 0 !important;
 }
-.metric-card .value { font-size: 2rem; font-weight: 700; color: #1a6b3c; }
-.metric-card .label { font-size: 0.85rem; color: #555; }
-
-/* Medicine result card */
-.med-card {
-    border: 1px solid #d4edda;
-    border-left: 5px solid #28a745;
-    border-radius: 8px;
-    padding: 1rem 1.2rem;
-    margin-bottom: 1rem;
-    background: #f9fffa;
+[data-testid="stHeader"],
+[data-testid="stToolbar"],
+[data-testid="stDecoration"],
+[data-testid="stStatusWidget"],
+[data-testid="collapsedControl"],
+#MainMenu,
+footer {
+  display: none !important;
 }
-.med-card.warning {
-    border-left-color: #ffc107;
-    background: #fffdf0;
+iframe {
+  display: block;
 }
-.med-card.danger {
-    border-left-color: #dc3545;
-    background: #fff5f5;
-}
-
-/* Alt row */
-.alt-best {
-    background: #e6f4ea;
-    border-radius: 8px;
-    padding: 0.4rem 0.8rem;
-    font-weight: 600;
-    color: #155724;
-}
-
-/* Badge */
-.badge {
-    display: inline-block;
-    padding: 2px 10px;
-    border-radius: 999px;
-    font-size: 0.75rem;
-    font-weight: 600;
-    margin-left: 6px;
-}
-.badge-green  { background: #d4edda; color: #155724; }
-.badge-yellow { background: #fff3cd; color: #856404; }
-.badge-red    { background: #f8d7da; color: #721c24; }
 </style>
 """,
     unsafe_allow_html=True,
 )
 
-
-# ── Helpers ──────────────────────────────────────────────────────────────────
-
-def savings_badge(pct: float) -> str:
-    if pct >= 50:
-        return f'<span class="badge badge-green">💰 Save {pct:.0f}%</span>'
-    elif pct >= 20:
-        return f'<span class="badge badge-yellow">💰 Save {pct:.0f}%</span>'
-    elif pct > 0:
-        return f'<span class="badge badge-red">Save {pct:.0f}%</span>'
-    return ""
-
-
-def _post_image(image_bytes: bytes, content_type: str, engine: str) -> dict:
-    resp = requests.post(
-        f"{API_BASE}/upload",
-        files={"file": ("prescription.jpg", image_bytes, content_type)},
-        data={"ocr_engine": engine},
-        timeout=60,
-    )
-    resp.raise_for_status()
-    return resp.json()
-
-
-def _post_text(text: str) -> dict:
-    resp = requests.post(
-        f"{API_BASE}/search-text",
-        data={"prescription_text": text},
-        timeout=30,
-    )
-    resp.raise_for_status()
-    return resp.json()
-
-
-def _search_medicine(name: str) -> dict:
-    resp = requests.get(
-        f"{API_BASE}/medicines/search",
-        params={"name": name},
-        timeout=15,
-    )
-    resp.raise_for_status()
-    return resp.json()
-
-
-def _list_medicines(q: str = "", category: str = "") -> list:
-    params = {"limit": 200}
-    if q:
-        params["q"] = q
-    if category:
-        params["category"] = category
-    resp = requests.get(f"{API_BASE}/medicines", params=params, timeout=15)
-    resp.raise_for_status()
-    return resp.json()
-
-
-def _get_categories() -> list:
-    try:
-        resp = requests.get(f"{API_BASE}/categories", timeout=10)
-        resp.raise_for_status()
-        return resp.json()
-    except Exception:
-        return []
-
-
-def render_results(results: list, session_id: str = ""):
-    """Render medicine match results nicely."""
-    found = [r for r in results if r.get("match_type") != "none" and not r.get("error")]
-    not_found = [r for r in results if r.get("error") or r.get("match_type") == "none"]
-
-    if not found and not not_found:
-        st.info("No medicines found in the prescription. Try entering medicine names manually below.")
-        return
-
-    # Summary metrics
-    total_brand = sum(
-        r["alternatives"][0]["brand_price"] if r.get("alternatives") else 0
-        for r in found
-    )
-    total_cheapest = sum(
-        r["alternatives"][0]["brand_price"] if r.get("alternatives") else 0
-        for r in found
-    )
-    # recalculate cheapest
-    total_cheapest = 0.0
-    for r in found:
-        if r.get("alternatives"):
-            total_cheapest += r["alternatives"][0]["brand_price"]
-
-    # The "original" prescription cost = matched brand price (first alt is cheapest, we need the original)
-    # Let's find matched brand price
-    original_total = 0.0
-    for r in found:
-        alts = r.get("alternatives", [])
-        # find the matched brand in alts
-        mb = r.get("matched_brand", "")
-        matched_alt = next((a for a in alts if a["brand_name"].lower() == mb.lower()), None)
-        if matched_alt:
-            original_total += matched_alt["brand_price"]
-        elif alts:
-            # fallback: max price
-            original_total += max(a["brand_price"] for a in alts)
-
-    potential_savings = max(0.0, original_total - total_cheapest)
-
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.markdown(
-            f'<div class="metric-card"><div class="value">{len(found)}</div>'
-            f'<div class="label">Medicines Identified</div></div>',
-            unsafe_allow_html=True,
-        )
-    with col2:
-        st.markdown(
-            f'<div class="metric-card"><div class="value">₹{original_total:.0f}</div>'
-            f'<div class="label">Est. Branded Cost / Strip</div></div>',
-            unsafe_allow_html=True,
-        )
-    with col3:
-        st.markdown(
-            f'<div class="metric-card"><div class="value">₹{total_cheapest:.0f}</div>'
-            f'<div class="label">Est. Generic Cost / Strip</div></div>',
-            unsafe_allow_html=True,
-        )
-    with col4:
-        pct = (potential_savings / original_total * 100) if original_total > 0 else 0
-        st.markdown(
-            f'<div class="metric-card"><div class="value">₹{potential_savings:.0f}</div>'
-            f'<div class="label">Potential Savings ({pct:.0f}%)</div></div>',
-            unsafe_allow_html=True,
-        )
-
-    st.markdown("---")
-
-    # Per-medicine results
-    for r in found:
-        alts = r.get("alternatives", [])
-        matched = r.get("matched_brand", r["query"])
-        salt = r.get("salt_composition", "")
-        match_type = r.get("match_type", "")
-        score = r.get("fuzzy_score", 100)
-
-        badge_html = ""
-        if match_type == "exact":
-            badge_html = '<span class="badge badge-green">✓ Exact Match</span>'
-        elif match_type == "fuzzy":
-            badge_html = f'<span class="badge badge-yellow">~ Fuzzy ({score}%)</span>'
-        elif match_type == "salt":
-            badge_html = '<span class="badge badge-yellow">~ Generic Match</span>'
-
-        with st.expander(f"💊 {matched}  {badge_html}", expanded=True):
-            if salt:
-                st.caption(f"**Salt / Composition:** {salt}")
-
-            if alts:
-                # Build table
-                rows = []
-                for i, a in enumerate(alts):
-                    tag = " ⭐ Best" if i == 0 else ""
-                    rows.append(
-                        {
-                            "Option": f"{a['brand_name']}{tag}",
-                            "Generic Name": a["generic_name"],
-                            "Manufacturer": a["manufacturer"],
-                            "Form": f"{a['form']} {a['strength']}",
-                            "Price / Unit (₹)": a["brand_price"],
-                            "Generic Price (₹)": a["generic_price"],
-                            "Jan Aushadhi (₹)": a.get("jan_aushadhi_price") or "N/A",
-                            "Savings vs Brand": f"₹{a['savings_vs_brand']} ({a['savings_pct']:.0f}%)",
-                        }
-                    )
-                df = pd.DataFrame(rows)
-                st.dataframe(
-                    df,
-                    use_container_width=True,
-                    hide_index=True,
-                    column_config={
-                        "Price / Unit (₹)": st.column_config.NumberColumn(format="₹%.2f"),
-                        "Generic Price (₹)": st.column_config.NumberColumn(format="₹%.2f"),
-                    },
-                )
-
-                best = alts[0]
-                st.success(
-                    f"✅ **Cheapest option:** {best['brand_name']} "
-                    f"@ ₹{best['brand_price']}/unit "
-                    f"— saves ₹{best['savings_vs_brand']} ({best['savings_pct']:.0f}%) vs branded"
-                )
-            else:
-                st.warning("No cheaper alternatives found in database.")
-
-    if not_found:
-        st.markdown("### ❓ Not Identified")
-        for r in not_found:
-            st.warning(f"**{r['query']}** — {r.get('error', 'No match found')}")
-
-
-# ── Sidebar ──────────────────────────────────────────────────────────────────
-
-with st.sidebar:
-    st.image(
-        "https://img.icons8.com/fluency/96/hospital.png",
-        width=64,
-    )
-    st.markdown("## Medico.AI")
-    st.caption("Smart Medicine Cost Optimizer for India")
-    st.markdown("---")
-
-    page = st.radio(
-        "Navigation",
-        ["🏠 Home", "📸 Upload Prescription", "🔍 Search Medicine", "📊 Browse Database", "ℹ️ About"],
-        label_visibility="collapsed",
-    )
-
-    st.markdown("---")
-    # Backend status
-    try:
-        r = requests.get(f"http://localhost:8000/health", timeout=2)
-        if r.ok:
-            st.success("🟢 Backend Online")
-        else:
-            st.error("🔴 Backend Error")
-    except Exception:
-        st.error("🔴 Backend Offline\nStart with:\n```\npython backend/app.py\n```")
-
-    st.markdown("---")
-    st.caption("⚕️ Always consult a qualified pharmacist or doctor before switching medicines.")
-
-
-# ── Pages ────────────────────────────────────────────────────────────────────
-
-# ── HOME ─────────────────────────────────────────────────────────────────────
-if page == "🏠 Home":
-    st.markdown(
-        """
-<div class="hero">
-  <h1>💊 Medico.AI</h1>
-  <p>AI-powered prescription decoder & generic medicine cost optimizer for India</p>
-</div>
-""",
-        unsafe_allow_html=True,
-    )
-
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        st.markdown("### 📸 Upload")
-        st.write("Photograph or scan your prescription. Our OCR engine reads it instantly.")
-    with c2:
-        st.markdown("### 🤖 AI Decode")
-        st.write("NLP extracts medicine names. Fuzzy matching maps brands to generic salt compositions.")
-    with c3:
-        st.markdown("### 💰 Save")
-        st.write("Get ranked cheaper alternatives including Jan Aushadhi store prices.")
-
-    st.markdown("---")
-    st.markdown("### 🚀 Quick Search")
-    quick = st.text_input("Enter a medicine name (e.g. Crocin, Augmentin, Lipitor)…")
-    if quick:
-        try:
-            data = _search_medicine(quick)
-            render_results([data])
-        except requests.HTTPError as e:
-            st.error(f"API error: {e}")
-        except requests.ConnectionError:
-            st.error("Cannot reach backend. Is `python backend/app.py` running?")
-
-    st.markdown("---")
-    st.info(
-        "**Disclaimer:** Medico.AI is an informational tool only. "
-        "Always consult a registered pharmacist or doctor before switching medicines."
-    )
-
-# ── UPLOAD ───────────────────────────────────────────────────────────────────
-elif page == "📸 Upload Prescription":
-    st.title("📸 Upload Prescription")
-    st.write("Upload a photo or scan of your prescription. Supported formats: JPG, PNG, WebP, BMP.")
-
-    tab_img, tab_text = st.tabs(["📷 Image Upload", "✏️ Type / Paste Text"])
-
-    with tab_img:
-        engine = st.selectbox(
-            "OCR Engine",
-            ["auto", "tesseract", "easyocr"],
-            help="'auto' tries Tesseract first, falls back to EasyOCR.",
-        )
-        uploaded = st.file_uploader(
-            "Choose prescription image",
-            type=["jpg", "jpeg", "png", "webp", "bmp"],
-        )
-
-        if uploaded:
-            col_img, col_info = st.columns([1, 2])
-            with col_img:
-                img = Image.open(uploaded)
-                st.image(img, caption="Uploaded Prescription", use_column_width=True)
-            with col_info:
-                st.write(f"**File:** {uploaded.name}")
-                st.write(f"**Size:** {uploaded.size / 1024:.1f} KB")
-                st.write(f"**OCR Engine:** {engine}")
-
-            if st.button("🔍 Analyse Prescription", type="primary"):
-                with st.spinner("Running OCR and AI analysis…"):
-                    try:
-                        uploaded.seek(0)
-                        raw = uploaded.read()
-                        data = _post_image(raw, uploaded.type or "image/jpeg", engine)
-
-                        with st.expander("📄 Raw OCR Text", expanded=False):
-                            st.code(data.get("raw_text", "(empty)"))
-                            st.caption(
-                                f"Engine: {data['ocr_engine']} | Confidence: {data['ocr_confidence']}%"
-                            )
-
-                        st.markdown(f"**Medicines extracted:** {data['total_medicines_found']}")
-                        if data.get("extracted_medicines"):
-                            st.write(", ".join(data["extracted_medicines"]))
-
-                        st.markdown("---")
-                        render_results(data.get("results", []))
-
-                    except requests.HTTPError as e:
-                        st.error(f"Server error {e.response.status_code}: {e.response.text}")
-                    except requests.ConnectionError:
-                        st.error("Backend offline. Run `python backend/app.py` first.")
-                    except Exception as e:
-                        st.error(f"Unexpected error: {e}")
-
-    with tab_text:
-        st.write("Type or paste medicine names or full prescription text:")
-        text_input = st.text_area(
-            "Prescription text",
-            height=200,
-            placeholder="e.g.\nTab Crocin 500mg BD\nCap Augmentin 625mg TDS\nTab Atorva 10mg OD",
-        )
-        if st.button("🔍 Find Alternatives", type="primary", key="text_btn"):
-            if not text_input.strip():
-                st.warning("Please enter some text.")
-            else:
-                with st.spinner("Analysing…"):
-                    try:
-                        data = _post_text(text_input)
-                        render_results(data.get("results", []))
-                    except requests.ConnectionError:
-                        st.error("Backend offline.")
-                    except Exception as e:
-                        st.error(f"Error: {e}")
-
-# ── SEARCH ───────────────────────────────────────────────────────────────────
-elif page == "🔍 Search Medicine":
-    st.title("🔍 Search Medicine")
-    st.write("Enter any brand or generic name — we'll find cheaper alternatives.")
-
-    name = st.text_input("Medicine name", placeholder="e.g. Lipitor, Atorvastatin, Augmentin…")
-
-    if name:
-        try:
-            data = _search_medicine(name)
-            render_results([data])
-        except requests.HTTPError as e:
-            st.error(f"API error: {e.response.text}")
-        except requests.ConnectionError:
-            st.error("Backend offline. Run `python backend/app.py` first.")
-
-# ── BROWSE ───────────────────────────────────────────────────────────────────
-elif page == "📊 Browse Database":
-    st.title("📊 Medicine Database")
-
-    cats = ["All"] + _get_categories()
-    col_q, col_cat = st.columns([3, 1])
-    with col_q:
-        q = st.text_input("Search by name / salt", placeholder="e.g. Paracetamol")
-    with col_cat:
-        cat = st.selectbox("Category", cats)
-
-    try:
-        medicines = _list_medicines(q=q, category=(cat if cat != "All" else ""))
-        if medicines:
-            df = pd.DataFrame(medicines)
-            df["Savings (Brand→Generic)"] = (
-                (df["brand_price_per_unit"] - df["generic_price_per_unit"]).round(2)
-            )
-            df["Savings %"] = (
-                (df["Savings (Brand→Generic)"] / df["brand_price_per_unit"] * 100).round(1)
-            )
-            st.dataframe(
-                df[
-                    [
-                        "brand_name", "generic_name", "salt_composition",
-                        "strength", "form", "manufacturer", "category",
-                        "brand_price_per_unit", "generic_price_per_unit",
-                        "jan_aushadhi_price", "Savings %",
-                    ]
-                ],
-                use_container_width=True,
-                hide_index=True,
-                column_config={
-                    "brand_price_per_unit": st.column_config.NumberColumn("Brand Price (₹)", format="₹%.2f"),
-                    "generic_price_per_unit": st.column_config.NumberColumn("Generic Price (₹)", format="₹%.2f"),
-                    "jan_aushadhi_price": st.column_config.NumberColumn("Jan Aushadhi (₹)", format="₹%.2f"),
-                    "Savings %": st.column_config.NumberColumn(format="%.1f%%"),
-                },
-            )
-            st.caption(f"Showing {len(medicines)} records")
-        else:
-            st.info("No medicines found. Try a different search.")
-    except requests.ConnectionError:
-        st.error("Backend offline.")
-
-# ── ABOUT ────────────────────────────────────────────────────────────────────
-elif page == "ℹ️ About":
-    st.title("ℹ️ About Medico.AI")
-    st.markdown(
-        """
-## 🏥 What is Medico.AI?
-
-**Medico.AI** is an open-source, AI-powered tool designed to help Indian patients
-discover cheaper generic alternatives to the branded medicines they are prescribed.
-
-### 🔬 How it works
-
-| Step | What happens |
-|------|-------------|
-| **Upload** | You photograph or scan your prescription |
-| **OCR** | Tesseract / EasyOCR extracts text from the image |
-| **NLP** | A rule-based NLP pipeline identifies medicine names |
-| **Matching** | RapidFuzz maps each name to our database using brand → generic → salt matching |
-| **Ranking** | Alternatives are sorted cheapest-first and savings are calculated |
-
-### 💊 Why this matters
-
-Branded medicines in India can cost **5–20× more** than their generic equivalents with
-identical salt compositions.  Most patients are unaware they can ask for generics, and many
-pharmacists push high-margin branded drugs.
-
-### 🏛️ Jan Aushadhi
-
-The Government of India's **Jan Aushadhi** initiative sells quality generics at 50–90% lower
-prices than brands.  Medico.AI includes Jan Aushadhi prices in all comparisons.
-
-### ⚙️ Tech Stack
-
-- **Backend**: FastAPI + SQLAlchemy + SQLite
-- **Frontend**: Streamlit
-- **OCR**: Tesseract + EasyOCR
-- **NLP**: Rule-based + RapidFuzz
-- **Data**: 100+ common Indian medicines with live price data
-
-### ⚠️ Disclaimer
-
-Medico.AI is an **informational tool only**.  Always consult a registered pharmacist or
-qualified doctor before changing any medication.  We do not dispense medical advice.
-
----
-Built with ❤️ for affordable healthcare in India.
-"""
-    )
+html_app = dedent(
+    f"""
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Medico.AI — Save on Medicines</title>
+    <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&family=Lato:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+      :root {{
+        --green: #1DB954;
+        --green-light: #e8faf0;
+        --green-dark: #148a3d;
+        --orange: #FF6B35;
+        --blue: #2563EB;
+        --bg: #F7F9FC;
+        --card: #ffffff;
+        --text: #1a1a2e;
+        --muted: #6B7280;
+        --border: #E5E7EB;
+        --shadow: 0 4px 24px rgba(0,0,0,0.08);
+        --radius: 18px;
+      }}
+
+      * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+
+      body {{
+        font-family: 'Lato', sans-serif;
+        background: var(--bg);
+        color: var(--text);
+        min-height: 100vh;
+      }}
+
+      nav {{
+        background: white;
+        border-bottom: 2px solid var(--border);
+        padding: 0 32px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        height: 68px;
+        position: sticky;
+        top: 0;
+        z-index: 100;
+        box-shadow: 0 2px 12px rgba(0,0,0,0.06);
+      }}
+      .logo {{
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-family: 'Nunito', sans-serif;
+        font-weight: 900;
+        font-size: 1.5rem;
+        color: var(--text);
+        text-decoration: none;
+      }}
+      .logo-icon {{
+        width: 40px; height: 40px;
+        background: linear-gradient(135deg, var(--green), var(--green-dark));
+        border-radius: 12px;
+        display: flex; align-items: center; justify-content: center;
+        font-size: 1.3rem;
+        box-shadow: 0 3px 10px rgba(29,185,84,0.35);
+      }}
+      .nav-links {{ display: flex; gap: 8px; align-items: center; }}
+      .nav-links a {{
+        font-family: 'Nunito', sans-serif;
+        font-weight: 700;
+        font-size: 0.95rem;
+        color: var(--muted);
+        text-decoration: none;
+        padding: 8px 16px;
+        border-radius: 10px;
+        transition: all 0.2s;
+      }}
+      .nav-links a:hover, .nav-links a.active {{
+        background: var(--green-light);
+        color: var(--green-dark);
+      }}
+      .status-pill {{
+        display: flex; align-items: center; gap: 6px;
+        background: var(--green-light);
+        color: var(--green-dark);
+        font-weight: 700;
+        font-size: 0.82rem;
+        padding: 6px 14px;
+        border-radius: 99px;
+        border: 1.5px solid var(--green);
+      }}
+      .dot {{ width: 8px; height: 8px; border-radius: 50%; background: var(--green); animation: pulse 1.8s infinite; }}
+      @keyframes pulse {{ 0%,100%{{opacity:1}} 50%{{opacity:0.4}} }}
+
+      .hero {{
+        background: linear-gradient(135deg, #0f4c35 0%, #1a7a4f 50%, #1DB954 100%);
+        padding: 56px 32px 48px;
+        text-align: center;
+        position: relative;
+        overflow: hidden;
+      }}
+      .hero::before {{
+        content: '';
+        position: absolute; inset: 0;
+        background: url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23ffffff' fill-opacity='0.04'%3E%3Ccircle cx='30' cy='30' r='4'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E");
+      }}
+      .hero h1 {{
+        font-family: 'Nunito', sans-serif;
+        font-weight: 900;
+        font-size: clamp(2rem, 4vw, 3rem);
+        color: white;
+        line-height: 1.15;
+        position: relative;
+      }}
+      .hero p {{
+        color: rgba(255,255,255,0.85);
+        font-size: 1.15rem;
+        margin: 12px auto 0;
+        max-width: 520px;
+        position: relative;
+      }}
+
+      .search-section {{
+        max-width: 680px;
+        margin: -28px auto 0;
+        padding: 0 24px;
+        position: relative;
+        z-index: 10;
+      }}
+      .search-box {{
+        background: white;
+        border-radius: 20px;
+        padding: 8px 8px 8px 20px;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        box-shadow: 0 8px 40px rgba(0,0,0,0.15);
+        border: 2px solid transparent;
+        transition: border 0.2s;
+      }}
+      .search-box:focus-within {{ border-color: var(--green); }}
+      .search-box input {{
+        flex: 1;
+        border: none; outline: none;
+        font-family: 'Nunito', sans-serif;
+        font-size: 1.1rem;
+        font-weight: 700;
+        color: var(--text);
+        background: transparent;
+      }}
+      .search-box input::placeholder {{ color: #b0b8c4; font-weight: 600; }}
+      .search-btn {{
+        background: linear-gradient(135deg, var(--green), var(--green-dark));
+        color: white;
+        border: none;
+        border-radius: 14px;
+        padding: 12px 28px;
+        font-family: 'Nunito', sans-serif;
+        font-weight: 800;
+        font-size: 1rem;
+        cursor: pointer;
+        transition: transform 0.15s, box-shadow 0.15s;
+        white-space: nowrap;
+      }}
+      .search-btn:hover {{ transform: translateY(-1px); box-shadow: 0 6px 20px rgba(29,185,84,0.45); }}
+      .search-hint {{
+        text-align: center;
+        color: var(--muted);
+        font-size: 0.85rem;
+        margin-top: 10px;
+      }}
+
+      .main {{ max-width: 960px; margin: 40px auto 60px; padding: 0 24px; }}
+      .summary-cards {{
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 16px;
+        margin-bottom: 32px;
+      }}
+      @media(max-width:700px){{ .summary-cards {{ grid-template-columns: repeat(2,1fr); }} }}
+      .sum-card {{
+        background: white;
+        border-radius: var(--radius);
+        padding: 22px 16px;
+        text-align: center;
+        box-shadow: var(--shadow);
+        border: 2px solid var(--border);
+        transition: transform 0.2s;
+      }}
+      .sum-card:hover {{ transform: translateY(-3px); }}
+      .sum-card .big {{
+        font-family: 'Nunito', sans-serif;
+        font-size: 2rem;
+        font-weight: 900;
+        line-height: 1;
+        margin-bottom: 6px;
+      }}
+      .sum-card .label {{
+        font-size: 0.82rem;
+        color: var(--muted);
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }}
+      .sum-card.green .big {{ color: var(--green-dark); }}
+      .sum-card.orange .big {{ color: var(--orange); }}
+      .sum-card.blue .big {{ color: var(--blue); }}
+      .sum-card.save {{ background: linear-gradient(135deg, #e8faf0, #d0f5e3); border-color: var(--green); }}
+      .sum-card.save .big {{ color: var(--green-dark); }}
+
+      .section-title {{
+        font-family: 'Nunito', sans-serif;
+        font-weight: 800;
+        font-size: 1.25rem;
+        color: var(--text);
+        margin-bottom: 16px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }}
+
+      .result-card {{
+        background: white;
+        border-radius: var(--radius);
+        box-shadow: var(--shadow);
+        border: 2px solid var(--border);
+        overflow: hidden;
+        margin-bottom: 24px;
+      }}
+      .result-header {{
+        padding: 18px 24px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        border-bottom: 2px solid var(--border);
+        background: #fafafa;
+      }}
+      .medicine-name {{
+        font-family: 'Nunito', sans-serif;
+        font-weight: 900;
+        font-size: 1.3rem;
+        color: var(--text);
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+      }}
+      .badge {{
+        display: inline-flex; align-items: center; gap: 4px;
+        padding: 4px 12px;
+        border-radius: 99px;
+        font-size: 0.78rem;
+        font-weight: 700;
+        font-family: 'Nunito', sans-serif;
+      }}
+      .badge-green {{ background: var(--green-light); color: var(--green-dark); border: 1.5px solid var(--green); }}
+      .badge-orange {{ background: #fff4ee; color: #c94a1a; border: 1.5px solid var(--orange); }}
+      .badge-muted {{ background:#f3f4f6;color:#6b7280;border:1.5px solid #d1d5db; }}
+
+      .composition {{
+        padding: 12px 24px;
+        background: #f0f9ff;
+        border-bottom: 1.5px solid var(--border);
+        font-size: 0.9rem;
+        color: #1e40af;
+        font-weight: 600;
+      }}
+      .composition span {{ font-weight: 800; }}
+      .options-wrap {{ padding: 0 24px 8px; overflow-x: auto; }}
+      table {{ width: 100%; border-collapse: collapse; margin: 16px 0; }}
+      thead tr {{ background: #f3f4f6; }}
+      th {{
+        font-family: 'Nunito', sans-serif;
+        font-size: 0.78rem;
+        font-weight: 800;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--muted);
+        padding: 10px 14px;
+        text-align: left;
+        white-space: nowrap;
+      }}
+      td {{
+        padding: 14px 14px;
+        font-size: 0.95rem;
+        color: var(--text);
+        border-bottom: 1.5px solid var(--border);
+        vertical-align: middle;
+      }}
+      tr:last-child td {{ border-bottom: none; }}
+      tr:hover td {{ background: #f9fafb; }}
+      .best-row td {{ background: #f0fff6 !important; }}
+      .option-name {{ font-family: 'Nunito', sans-serif; font-weight: 800; font-size: 1rem; }}
+      .star-badge {{
+        display: inline-flex; align-items: center; gap: 4px;
+        background: #fff8e1; color: #b45309;
+        border: 1.5px solid #fcd34d;
+        padding: 2px 8px; border-radius: 99px;
+        font-size: 0.75rem; font-weight: 700;
+      }}
+      .price {{ font-family: 'Nunito', sans-serif; font-weight: 800; font-size: 1.05rem; }}
+      .price-generic {{ color: var(--green-dark); }}
+      .price-branded {{ color: var(--orange); }}
+      .savings-chip {{
+        display: inline-block;
+        background: var(--green-light);
+        color: var(--green-dark);
+        border-radius: 8px;
+        padding: 3px 10px;
+        font-weight: 800;
+        font-size: 0.88rem;
+        font-family: 'Nunito', sans-serif;
+      }}
+
+      .cheapest-banner {{
+        margin: 0 24px 20px;
+        background: linear-gradient(90deg, #1DB954, #148a3d);
+        border-radius: 14px;
+        padding: 16px 22px;
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        color: white;
+      }}
+      .cheapest-icon {{
+        width: 42px; height: 42px;
+        background: rgba(255,255,255,0.2);
+        border-radius: 12px;
+        display: flex; align-items: center; justify-content: center;
+        font-size: 1.4rem; flex-shrink: 0;
+      }}
+      .cheapest-text .title {{
+        font-family: 'Nunito', sans-serif;
+        font-weight: 900;
+        font-size: 1.05rem;
+      }}
+      .cheapest-text .sub {{
+        font-size: 0.88rem;
+        opacity: 0.88;
+        margin-top: 2px;
+      }}
+
+      .how-section {{ margin: 40px 0; }}
+      .steps {{ display: grid; grid-template-columns: repeat(3,1fr); gap: 20px; }}
+      @media(max-width:600px){{ .steps {{ grid-template-columns: 1fr; }} }}
+      .step-card {{
+        background: white;
+        border-radius: var(--radius);
+        padding: 28px 22px;
+        text-align: center;
+        box-shadow: var(--shadow);
+        border: 2px solid var(--border);
+        position: relative;
+      }}
+      .step-num {{
+        width: 44px; height: 44px;
+        border-radius: 50%;
+        background: linear-gradient(135deg, var(--green), var(--green-dark));
+        color: white;
+        font-family: 'Nunito', sans-serif;
+        font-weight: 900;
+        font-size: 1.25rem;
+        display: flex; align-items: center; justify-content: center;
+        margin: 0 auto 14px;
+        box-shadow: 0 4px 14px rgba(29,185,84,0.35);
+      }}
+      .step-icon {{ font-size: 2rem; margin-bottom: 8px; }}
+      .step-card h3 {{
+        font-family: 'Nunito', sans-serif;
+        font-weight: 800;
+        font-size: 1.1rem;
+        margin-bottom: 8px;
+      }}
+      .step-card p {{ color: var(--muted); font-size: 0.92rem; line-height: 1.5; }}
+
+      .upload-card {{
+        background: white;
+        border-radius: var(--radius);
+        padding: 36px;
+        text-align: center;
+        box-shadow: var(--shadow);
+        border: 3px dashed var(--border);
+        margin-bottom: 32px;
+        transition: border-color 0.2s;
+      }}
+      .upload-card:hover {{ border-color: var(--green); background: var(--green-light); }}
+      .upload-icon {{ font-size: 3rem; margin-bottom: 12px; }}
+      .upload-card h2 {{
+        font-family: 'Nunito', sans-serif;
+        font-weight: 900;
+        font-size: 1.4rem;
+        margin-bottom: 8px;
+      }}
+      .upload-card p {{ color: var(--muted); margin-bottom: 20px; }}
+      .btn-upload {{
+        background: linear-gradient(135deg, var(--green), var(--green-dark));
+        color: white;
+        border: none;
+        padding: 14px 32px;
+        border-radius: 14px;
+        font-family: 'Nunito', sans-serif;
+        font-weight: 800;
+        font-size: 1rem;
+        cursor: pointer;
+        box-shadow: 0 4px 16px rgba(29,185,84,0.35);
+        transition: transform 0.15s;
+      }}
+      .btn-upload:hover {{ transform: translateY(-2px); }}
+      input[type=file] {{ margin: 14px 0; }}
+      textarea {{
+        width: 100%;
+        min-height: 160px;
+        resize: vertical;
+        border: 2px solid var(--border);
+        border-radius: 14px;
+        padding: 14px;
+        font-family: 'Lato', sans-serif;
+        font-size: 1rem;
+      }}
+
+      .disclaimer {{
+        background: #fffbeb;
+        border: 2px solid #fcd34d;
+        border-radius: 14px;
+        padding: 16px 20px;
+        display: flex;
+        gap: 12px;
+        align-items: flex-start;
+        margin-top: 24px;
+      }}
+      .disclaimer-icon {{ font-size: 1.4rem; flex-shrink: 0; margin-top: 2px; }}
+      .disclaimer p {{
+        color: #92400e;
+        font-size: 0.9rem;
+        line-height: 1.5;
+        font-weight: 600;
+      }}
+
+      .tabs {{ display: flex; gap: 6px; margin-bottom: 24px; flex-wrap: wrap; }}
+      .tab {{
+        padding: 10px 22px;
+        border-radius: 12px;
+        font-family: 'Nunito', sans-serif;
+        font-weight: 700;
+        font-size: 0.95rem;
+        cursor: pointer;
+        border: 2px solid var(--border);
+        background: white;
+        color: var(--muted);
+        transition: all 0.15s;
+      }}
+      .tab.active {{
+        background: var(--green);
+        color: white;
+        border-color: var(--green);
+        box-shadow: 0 3px 12px rgba(29,185,84,0.3);
+      }}
+
+      .page-section {{ display: none; }}
+      .page-section.active {{ display: block; }}
+      .loading, .error-msg {{
+        text-align: center;
+        padding: 18px;
+        color: var(--muted);
+        font-weight: 700;
+      }}
+      .error-msg {{ color: #c94a1a; }}
+      footer {{
+        background: #1a1a2e;
+        color: rgba(255,255,255,0.6);
+        text-align: center;
+        padding: 20px;
+        font-size: 0.88rem;
+      }}
+      footer span {{ color: var(--green); font-weight: 700; }}
+      @media(max-width:760px) {{
+        nav {{ height: auto; padding: 16px; flex-direction: column; align-items: flex-start; }}
+        .nav-links {{ flex-wrap: wrap; }}
+        .search-box {{ flex-direction: column; align-items: stretch; }}
+        .summary-cards {{ grid-template-columns: 1fr; }}
+      }}
+    </style>
+    </head>
+    <body>
+
+    <nav>
+      <a href="#" class="logo">
+        <div class="logo-icon">💊</div>
+        Medico.AI
+      </a>
+      <div class="nav-links">
+        <a href="#" class="active" onclick="showPage('home',this)">🏠 Home</a>
+        <a href="#" onclick="showPage('upload',this)">📷 Upload Prescription</a>
+        <a href="#" onclick="showPage('search',this)">🔍 Search Medicine</a>
+        <a href="#" onclick="showPage('browse',this)">📋 Browse</a>
+      </div>
+      <div class="status-pill">
+        <div class="dot"></div>
+        <span id="statusText">Checking backend...</span>
+      </div>
+    </nav>
+
+    <div id="page-home" class="page-section active">
+      <div class="hero">
+        <h1>💊 Find Cheaper Medicines<br>Save Up to 80%</h1>
+        <p>Type any medicine name and instantly see affordable generic alternatives</p>
+      </div>
+
+      <div class="search-section">
+        <div class="search-box">
+          <span style="font-size:1.3rem">🔍</span>
+          <input type="text" id="searchInput" placeholder="e.g. Augmentin, Crocin, Lipitor..." value="Augmentin">
+          <button class="search-btn" onclick="searchHome()">Search →</button>
+        </div>
+        <p class="search-hint">💡 Try: Crocin · Augmentin · Metformin · Lipitor · Paracetamol</p>
+      </div>
+
+      <div class="main">
+        <div class="how-section">
+          <div class="section-title">✨ How It Works</div>
+          <div class="steps">
+            <div class="step-card">
+              <div class="step-icon">📸</div>
+              <div class="step-num">1</div>
+              <h3>Upload or Search</h3>
+              <p>Take a photo of your prescription or simply type the medicine name</p>
+            </div>
+            <div class="step-card">
+              <div class="step-icon">🤖</div>
+              <div class="step-num">2</div>
+              <h3>AI Finds Alternatives</h3>
+              <p>Our AI matches brands to their generic salt compositions instantly</p>
+            </div>
+            <div class="step-card">
+              <div class="step-icon">💰</div>
+              <div class="step-num">3</div>
+              <h3>Save Money</h3>
+              <p>See ranked cheaper options including Jan Aushadhi store prices</p>
+            </div>
+          </div>
+        </div>
+
+        <div id="resultsSection" style="display:none">
+          <div class="section-title">📋 Results for "<span id="searchedName">Augmentin</span>"</div>
+          <div id="resultsContent"></div>
+        </div>
+      </div>
+    </div>
+
+    <div id="page-upload" class="page-section">
+      <div class="main" style="max-width:680px">
+        <div class="section-title" style="margin-top:16px">📷 Upload Your Prescription</div>
+        <div class="upload-card">
+          <div class="upload-icon">🗒️</div>
+          <h2>Take a Photo or Upload</h2>
+          <p>Our AI will read your prescription and find cheaper alternatives for all medicines</p>
+          <input id="prescriptionFile" type="file" accept="image/jpeg,image/png,image/webp,image/bmp,image/tiff">
+          <br>
+          <button class="btn-upload" onclick="uploadPrescription()">📷 Analyse Prescription</button>
+          <p style="margin-top:14px;font-size:0.82rem;color:#aaa">Supports JPG, PNG, WebP, BMP, TIFF · Max 10MB</p>
+        </div>
+        <div id="uploadResults"></div>
+        <div class="disclaimer">
+          <div class="disclaimer-icon">🔒</div>
+          <p>Your prescription is processed securely. We only extract medicine names for comparison.</p>
+        </div>
+      </div>
+    </div>
+
+    <div id="page-search" class="page-section">
+      <div class="main" style="max-width:680px">
+        <div class="section-title" style="margin-top:16px">🔍 Search Medicine</div>
+        <div class="search-box" style="margin-bottom:16px">
+          <span style="font-size:1.3rem">🔍</span>
+          <input id="searchPageInput" type="text" placeholder="Type medicine name...">
+          <button class="search-btn" onclick="searchStandalone()">Search →</button>
+        </div>
+        <p class="search-hint" style="text-align:left;margin-bottom:24px">Popular: Crocin · Metformin · Atorvastatin · Pantoprazole · Azithromycin</p>
+        <div id="searchPageResults"></div>
+        <div class="disclaimer">
+          <div class="disclaimer-icon">💡</div>
+          <p>You can search by brand name like "Crocin" or generic name like "Paracetamol". Both work.</p>
+        </div>
+      </div>
+    </div>
+
+    <div id="page-browse" class="page-section">
+      <div class="main">
+        <div class="section-title" style="margin-top:16px">📋 Medicine Database</div>
+        <div class="tabs" id="categoryTabs">
+          <div class="tab active" onclick="browseMedicines('', this)">All</div>
+        </div>
+        <div id="browseResults" class="result-card" style="padding:24px;text-align:center;color:var(--muted)">
+          <div style="font-size:2.5rem;margin-bottom:12px">📚</div>
+          <strong style="font-size:1.1rem;font-family:'Nunito',sans-serif">Medicine database loading...</strong>
+        </div>
+      </div>
+    </div>
+
+    <footer>
+      Made with ❤️ for India &nbsp;|&nbsp; <span>Medico.AI</span> &nbsp;|&nbsp; Always consult your doctor before switching medicines
+    </footer>
+
+    <script>
+      const API_BASE = "{API_BASE}";
+      const HEALTH_URL = "{HEALTH_URL}";
+
+      function esc(value) {{
+        return String(value ?? '').replace(/[&<>"']/g, ch => ({{
+          '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;'
+        }}[ch]));
+      }}
+
+      function rupee(value) {{
+        const n = Number(value);
+        return Number.isFinite(n) ? `₹${{n.toFixed(2)}}` : 'N/A';
+      }}
+
+      function showPage(name, el) {{
+        document.querySelectorAll('.page-section').forEach(s => s.classList.remove('active'));
+        document.getElementById('page-' + name).classList.add('active');
+        document.querySelectorAll('.nav-links a').forEach(a => a.classList.remove('active'));
+        if (el) el.classList.add('active');
+        if (name === 'browse') loadBrowse();
+      }}
+
+      async function updateStatus() {{
+        try {{
+          const res = await fetch(HEALTH_URL);
+          const data = await res.json();
+          document.getElementById('statusText').textContent = data.database === 'connected'
+            ? `${{data.medicines_in_db}} Medicines Ready`
+            : 'Backend Online';
+        }} catch (err) {{
+          document.getElementById('statusText').textContent = 'Backend Offline';
+          document.querySelector('.status-pill').style.borderColor = '#FF6B35';
+          document.querySelector('.status-pill').style.color = '#c94a1a';
+          document.querySelector('.status-pill').style.background = '#fff4ee';
+        }}
+      }}
+
+      function summaryHtml(results) {{
+        const found = results.filter(r => r.match_type !== 'none' && !r.error);
+        let original = 0;
+        let cheapest = 0;
+        found.forEach(r => {{
+          const alts = r.alternatives || [];
+          if (!alts.length) return;
+          cheapest += Number(alts[0].brand_price || 0);
+          const matched = alts.find(a => String(a.brand_name).toLowerCase() === String(r.matched_brand || '').toLowerCase());
+          original += matched ? Number(matched.brand_price || 0) : Math.max(...alts.map(a => Number(a.brand_price || 0)));
+        }});
+        const saved = Math.max(0, original - cheapest);
+        const pct = original > 0 ? saved / original * 100 : 0;
+        return `
+          <div class="summary-cards">
+            <div class="sum-card blue"><div class="big">${{found.length}}</div><div class="label">Medicine Found</div></div>
+            <div class="sum-card orange"><div class="big">₹${{original.toFixed(0)}}</div><div class="label">Branded Price / Strip</div></div>
+            <div class="sum-card green"><div class="big">₹${{cheapest.toFixed(0)}}</div><div class="label">Generic Price / Strip</div></div>
+            <div class="sum-card save"><div class="big">₹${{saved.toFixed(0)}} 💚</div><div class="label">You Save (${{pct.toFixed(0)}}%!)</div></div>
+          </div>`;
+      }}
+
+      function badgeFor(match) {{
+        if (match.match_type === 'exact') return '<span class="badge badge-green">✅ Exact Match</span>';
+        if (match.match_type === 'fuzzy') return `<span class="badge badge-orange">~ Fuzzy (${{match.fuzzy_score || 0}}%)</span>`;
+        if (match.match_type === 'salt') return '<span class="badge badge-orange">~ Generic Match</span>';
+        return '<span class="badge badge-muted">Matched</span>';
+      }}
+
+      function resultsHtml(results) {{
+        const found = results.filter(r => r.match_type !== 'none' && !r.error);
+        const notFound = results.filter(r => r.match_type === 'none' || r.error);
+        if (!found.length && !notFound.length) return '<div class="error-msg">No medicines found. Try a different search.</div>';
+
+        let html = summaryHtml(results);
+        found.forEach(r => {{
+          const alts = r.alternatives || [];
+          const rows = alts.map((a, index) => {{
+            const best = index === 0 ? '<span class="star-badge">⭐ Best Value</span>' : '';
+            const priceClass = index === 0 ? 'price-generic' : 'price-branded';
+            const save = Number(a.savings_pct || 0) > 0
+              ? `<span class="savings-chip">Save ${{Number(a.savings_pct || 0).toFixed(0)}}% 🎉</span>`
+              : '<span class="badge badge-muted">Branded</span>';
+            const jan = index === 0 && a.jan_aushadhi_price
+              ? '<br><span class="badge badge-orange" style="font-size:0.72rem">Jan Aushadhi</span>'
+              : '';
+            return `
+              <tr class="${{index === 0 ? 'best-row' : ''}}">
+                <td><div class="option-name">${{esc(a.brand_name)}}</div>${{best}}${{jan}}</td>
+                <td>${{esc(a.generic_name)}}</td>
+                <td>${{esc(a.manufacturer)}}</td>
+                <td>${{esc((a.strength || '') + ' ' + (a.form || ''))}}</td>
+                <td><span class="price ${{priceClass}}">${{rupee(a.brand_price)}}</span></td>
+                <td>${{save}}</td>
+              </tr>`;
+          }}).join('');
+          const best = alts[0] || {{}};
+          html += `
+            <div class="result-card">
+              <div class="result-header">
+                <div class="medicine-name">💊 ${{esc(r.matched_brand || r.query)}} ${{badgeFor(r)}}</div>
+                <button style="background:none;border:none;font-size:1.3rem;cursor:pointer;">▲</button>
+              </div>
+              <div class="composition">🧪 Active Ingredient: <span>${{esc(r.salt_composition || '')}}</span></div>
+              <div class="options-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Option</th>
+                      <th>Generic Salt Name</th>
+                      <th>Manufacturer</th>
+                      <th>Tablet Form</th>
+                      <th>Price / Unit</th>
+                      <th>You Save</th>
+                    </tr>
+                  </thead>
+                  <tbody>${{rows}}</tbody>
+                </table>
+              </div>
+              <div class="cheapest-banner">
+                <div class="cheapest-icon">🏆</div>
+                <div class="cheapest-text">
+                  <div class="title">Best Deal: ${{esc(best.brand_name || 'Best option')}} @ ${{rupee(best.brand_price)}} per unit</div>
+                  <div class="sub">You save ${{rupee(best.savings_vs_brand)}} (${{Number(best.savings_pct || 0).toFixed(0)}}%) compared to branded medicine.</div>
+                </div>
+              </div>
+            </div>`;
+        }});
+
+        if (notFound.length) {{
+          html += '<div class="result-card" style="padding:20px"><div class="section-title">❓ Not Identified</div>';
+          notFound.forEach(r => html += `<div class="error-msg">${{esc(r.query)}} — ${{esc(r.error || 'No match found')}}</div>`);
+          html += '</div>';
+        }}
+
+        html += `
+          <div class="disclaimer">
+            <div class="disclaimer-icon">⚠️</div>
+            <p><strong>Important:</strong> Medico.AI is an information tool only. Always consult a registered pharmacist or doctor before switching any medicine. Generic medicines contain the same active ingredient but please verify with your healthcare provider.</p>
+          </div>`;
+        return html;
+      }}
+
+      async function searchMedicine(name, targetId) {{
+        const target = document.getElementById(targetId);
+        target.innerHTML = '<div class="loading">Searching cheaper alternatives...</div>';
+        try {{
+          const res = await fetch(`${{API_BASE}}/medicines/search?name=${{encodeURIComponent(name)}}`);
+          if (!res.ok) throw new Error(await res.text());
+          const data = await res.json();
+          target.innerHTML = resultsHtml([data]);
+        }} catch (err) {{
+          target.innerHTML = `<div class="error-msg">Cannot reach backend. Is FastAPI running on port 8000?</div>`;
+        }}
+      }}
+
+      function searchHome() {{
+        const val = document.getElementById('searchInput').value.trim() || 'Augmentin';
+        document.getElementById('searchedName').textContent = val;
+        document.getElementById('resultsSection').style.display = 'block';
+        searchMedicine(val, 'resultsContent');
+        document.getElementById('resultsSection').scrollIntoView({{ behavior: 'smooth', block: 'start' }});
+      }}
+
+      function searchStandalone() {{
+        const val = document.getElementById('searchPageInput').value.trim();
+        if (!val) return;
+        searchMedicine(val, 'searchPageResults');
+      }}
+
+      async function uploadPrescription() {{
+        const fileInput = document.getElementById('prescriptionFile');
+        const target = document.getElementById('uploadResults');
+        if (!fileInput.files.length) {{
+          target.innerHTML = '<div class="error-msg">Please choose a prescription image first.</div>';
+          return;
+        }}
+        const form = new FormData();
+        form.append('file', fileInput.files[0]);
+        form.append('ocr_engine', 'auto');
+        target.innerHTML = '<div class="loading">Running OCR and AI analysis...</div>';
+        try {{
+          const res = await fetch(`${{API_BASE}}/upload`, {{ method: 'POST', body: form }});
+          if (!res.ok) throw new Error(await res.text());
+          const data = await res.json();
+          target.innerHTML = `
+            <div class="result-card" style="padding:20px">
+              <div class="section-title">📄 Raw OCR Text</div>
+              <pre style="white-space:pre-wrap;color:var(--muted)">${{esc(data.raw_text || '(empty)')}}</pre>
+            </div>
+          ` + resultsHtml(data.results || []);
+        }} catch (err) {{
+          target.innerHTML = `<div class="error-msg">Upload failed: ${{esc(err.message)}}</div>`;
+        }}
+      }}
+
+      async function loadCategories() {{
+        try {{
+          const res = await fetch(`${{API_BASE}}/categories`);
+          const cats = await res.json();
+          const wrap = document.getElementById('categoryTabs');
+          cats.slice(0, 6).forEach(cat => {{
+            const div = document.createElement('div');
+            div.className = 'tab';
+            div.textContent = cat;
+            div.onclick = () => browseMedicines(cat, div);
+            wrap.appendChild(div);
+          }});
+        }} catch (err) {{}}
+      }}
+
+      async function loadBrowse() {{
+        const target = document.getElementById('browseResults');
+        if (target.dataset.loaded) return;
+        browseMedicines('', document.querySelector('#categoryTabs .tab'));
+      }}
+
+      async function browseMedicines(category, el) {{
+        document.querySelectorAll('#categoryTabs .tab').forEach(t => t.classList.remove('active'));
+        if (el) el.classList.add('active');
+        const target = document.getElementById('browseResults');
+        target.dataset.loaded = '1';
+        target.innerHTML = '<div class="loading">Loading medicines...</div>';
+        try {{
+          const params = new URLSearchParams({{ limit: 80 }});
+          if (category) params.set('category', category);
+          const res = await fetch(`${{API_BASE}}/medicines?${{params}}`);
+          const meds = await res.json();
+          const rows = meds.map(m => {{
+            const savings = Number(m.brand_price_per_unit || 0) - Number(m.generic_price_per_unit || 0);
+            const pct = Number(m.brand_price_per_unit || 0) > 0 ? savings / Number(m.brand_price_per_unit) * 100 : 0;
+            return `
+              <tr>
+                <td><div class="option-name">${{esc(m.brand_name)}}</div></td>
+                <td>${{esc(m.generic_name)}}</td>
+                <td>${{esc(m.salt_composition)}}</td>
+                <td>${{esc(m.category)}}</td>
+                <td><span class="price price-branded">${{rupee(m.brand_price_per_unit)}}</span></td>
+                <td><span class="price price-generic">${{rupee(m.generic_price_per_unit)}}</span></td>
+                <td><span class="savings-chip">${{pct.toFixed(0)}}%</span></td>
+              </tr>`;
+          }}).join('');
+          target.className = 'result-card';
+          target.style.padding = '0';
+          target.innerHTML = `
+            <div class="options-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Brand</th><th>Generic</th><th>Salt</th><th>Category</th>
+                    <th>Brand Price</th><th>Generic Price</th><th>Savings</th>
+                  </tr>
+                </thead>
+                <tbody>${{rows}}</tbody>
+              </table>
+            </div>`;
+        }} catch (err) {{
+          target.innerHTML = '<div class="error-msg">Cannot load medicine database.</div>';
+        }}
+      }}
+
+      document.getElementById('searchInput').addEventListener('keydown', e => {{
+        if (e.key === 'Enter') searchHome();
+      }});
+      document.getElementById('searchPageInput').addEventListener('keydown', e => {{
+        if (e.key === 'Enter') searchStandalone();
+      }});
+
+      updateStatus();
+      loadCategories();
+    </script>
+    </body>
+    </html>
+    """
+)
+
+components.html(html_app, height=1500, scrolling=True)
