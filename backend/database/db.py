@@ -2,13 +2,15 @@
 Database setup — SQLite by default, PostgreSQL via DATABASE_URL env var.
 """
 import os
+import tempfile
 from sqlalchemy import create_engine, Column, Integer, String, Float, Text, DateTime
 from sqlalchemy.orm import declarative_base, sessionmaker
 from datetime import datetime
 
 def _default_database_url() -> str:
     if os.getenv("VERCEL"):
-        return "sqlite:////tmp/medico.db"
+        db_path = os.path.join(tempfile.gettempdir(), "medico.db")
+        return f"sqlite:///{db_path}"
     return "sqlite:///./medico.db"
 
 
