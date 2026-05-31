@@ -6,7 +6,13 @@ from sqlalchemy import create_engine, Column, Integer, String, Float, Text, Date
 from sqlalchemy.orm import declarative_base, sessionmaker
 from datetime import datetime
 
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./medico.db")
+def _default_database_url() -> str:
+    if os.getenv("VERCEL"):
+        return "sqlite:////tmp/medico.db"
+    return "sqlite:///./medico.db"
+
+
+DATABASE_URL = os.getenv("DATABASE_URL", _default_database_url())
 
 engine = create_engine(
     DATABASE_URL,
