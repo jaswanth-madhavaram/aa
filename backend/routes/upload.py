@@ -5,6 +5,7 @@ POST /api/v1/upload  — accepts image, returns extracted medicine names + alter
 from __future__ import annotations
 
 import uuid
+import re
 from typing import List, Optional
 
 from fastapi import APIRouter, File, UploadFile, HTTPException, Depends, Form
@@ -116,6 +117,91 @@ def _match_to_out(m: MedicineMatch) -> MedicineMatchOut:
     )
 
 
+_CANDIDATE_STOPWORDS = {
+    "after",
+    "before",
+    "daily",
+    "doctor",
+    "food",
+    "morning",
+    "night",
+    "patient",
+    "tablet",
+    "tablets",
+    "take",
+}
+
+
+def _fallback_candidates_from_ocr(text: str, limit: int = 24) -> List[str]:
+    candidates: List[str] = []
+    seen: set[str] = set()
+
+    for raw_line in text.replace("\r", "\n").split("\n"):
+        line = re.sub(r"\s+", " ", raw_line).strip()
+        if len(line) < 3:
+            continue
+        if re.search(r"\b(?:doctor|hospital|clinic|patient|age|sex|date|phone|mobile)\b", line, re.I):
+            continue
+
+        working = re.sub(r"^\s*(?:rx|r/|\d+[\).:-]?|[-*])\s*", " ", line, flags=re.I)
+        working = re.sub(
+            r"\b(?:tab(?:let)?s?|cap(?:sule)?s?|syp|syr(?:up)?|inj(?:ection)?|"
+            r"susp(?:ension)?|drop(?:s)?|cream|gel)\b\.?\s*",
+            " ",
+            working,
+            count=1,
+            flags=re.I,
+        )
+        working = re.split(
+            r"\b(?:after|before|daily|morning|night|evening|bd|od|tds|sos|days?|"
+            r"with|without|food|meal)\b",
+            working,
+            maxsplit=1,
+            flags=re.I,
+        )[0]
+        tokens = re.findall(r"[A-Za-z][A-Za-z0-9+-]*|\d{2,4}", working)
+        tokens = [
+            token
+            for token in tokens
+            if len(token) >= 2 and token.lower() not in _CANDIDATE_STOPWORDS
+        ]
+
+        for size in (3, 2, 1):
+            for start in range(0, max(0, len(tokens) - size + 1)):
+                phrase = " ".join(tokens[start : start + size]).strip()
+                key = re.sub(r"[^a-z0-9]+", "", phrase.lower())
+                if len(key) < 3 or key in seen:
+                    continue
+                seen.add(key)
+                candidates.append(phrase)
+                if len(candidates) >= limit:
+                    return candidates
+
+    return candidates
+
+
+def _successful_matches(matches: List[MedicineMatch]) -> List[MedicineMatch]:
+    return [m for m in matches if m.match_type != "none" and not m.error]
+
+
+def _details_from_matches(matches: List[MedicineMatch]) -> List[dict]:
+    details = []
+    for match in matches:
+        name = match.matched_brand or match.query
+        if not name:
+            continue
+        details.append(
+            {
+                "name": name,
+                "form": None,
+                "dosage": None,
+                "source_line": match.query,
+                "confidence": f"search-{match.match_type}",
+            }
+        )
+    return details
+
+
 # ── routes ───────────────────────────────────────────────────────────────────
 
 @router.post("/upload", response_model=UploadResponse)
@@ -154,6 +240,14 @@ async def upload_prescription(
 
     # Match & price
     matches = bulk_find_alternatives(medicines_found, db)
+    if not _successful_matches(matches):
+        fallback_candidates = _fallback_candidates_from_ocr(raw_text)
+        fallback_matches = bulk_find_alternatives(fallback_candidates, db)
+        successful = _successful_matches(fallback_matches)
+        if successful:
+            matches = successful
+            medicine_details = _details_from_matches(successful)
+            medicines_found = [m["name"] for m in medicine_details if m.get("name")]
 
     # Save to history
     session_id = str(uuid.uuid4())
@@ -190,6 +284,14 @@ async def search_by_text(
     medicine_details = extract_medicine_details(prescription_text)
     medicines_found = [m["name"] for m in medicine_details if m.get("name")]
     matches = bulk_find_alternatives(medicines_found, db)
+    if not _successful_matches(matches):
+        fallback_candidates = _fallback_candidates_from_ocr(prescription_text)
+        fallback_matches = bulk_find_alternatives(fallback_candidates, db)
+        successful = _successful_matches(fallback_matches)
+        if successful:
+            matches = successful
+            medicine_details = _details_from_matches(successful)
+            medicines_found = [m["name"] for m in medicine_details if m.get("name")]
 
     session_id = str(uuid.uuid4())
     history = SearchHistory(
