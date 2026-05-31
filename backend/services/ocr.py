@@ -135,6 +135,32 @@ def _normalise_key(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", value.lower())
 
 
+def _on_vercel() -> bool:
+    return os.getenv("VERCEL", "").lower() in {"1", "true", "yes"}
+
+
+def _has_cloud_ocr() -> bool:
+    return bool(_gemini_api_key())
+
+
+def _gemini_api_key() -> str:
+    return os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY", "")
+
+
+def ocr_runtime_status() -> dict:
+    cloud_enabled = _has_cloud_ocr()
+    local_available = not _on_vercel()
+    engines = ["gemini-vision"] if cloud_enabled else []
+    if local_available:
+        engines.extend(["tesseract", "easyocr"])
+    return {
+        "cloud_vision_enabled": cloud_enabled,
+        "local_ocr_available": local_available,
+        "available_engines": engines,
+        "vision_model": os.environ.get("MEDICO_VISION_MODEL", "gemini-2.5-flash"),
+    }
+
+
 def extract_text_from_image(image_bytes: bytes, engine: str = "auto") -> dict:
     """
     Extract raw text from image bytes.
@@ -159,20 +185,25 @@ def extract_text_from_image(image_bytes: bytes, engine: str = "auto") -> dict:
         result["error"] = f"Cannot open image: {e}"
         return result
 
-    if engine in ("auto", "claude", "llm"):
-        text, conf, lines = _try_claude(image_bytes)
+    if engine in ("auto", "gemini", "llm"):
+        text, conf, lines = _try_gemini(image_bytes)
         if text.strip():
             result.update(
                 text=_clean_text(text),
-                engine_used="claude-vision",
+                engine_used="gemini-vision",
                 confidence=conf,
                 lines=lines,
                 processing_steps=["vision-llm-transcription"],
             )
             return result
-        if engine in ("claude", "llm"):
-            result["error"] = "Vision LLM could not extract text. Check ANTHROPIC_API_KEY."
+        if engine in ("gemini", "llm"):
+            result["error"] = "Vision LLM could not extract text. Check GEMINI_API_KEY."
             return result
+
+    if engine == "auto" and _on_vercel() and not _has_cloud_ocr():
+        result["processing_steps"] = ["vercel-local-ocr-unavailable"]
+        result["error"] = _ocr_failure_message([])
+        return result
 
     attempts: List[Dict[str, Any]] = []
     variants = _preprocess_variants(img)
@@ -224,63 +255,81 @@ def extract_text_from_image(image_bytes: bytes, engine: str = "auto") -> dict:
 
 
 def _ocr_failure_message(attempts: List[Dict[str, Any]]) -> str:
-    if os.getenv("VERCEL") and not os.environ.get("ANTHROPIC_API_KEY"):
+    if _on_vercel() and not _has_cloud_ocr():
         return (
             "No text could be extracted from the image. On Vercel, local OCR engines "
             "like Tesseract/EasyOCR are not available in this deployment. Add "
-            "ANTHROPIC_API_KEY in Vercel Environment Variables to enable cloud vision OCR, "
+            "GEMINI_API_KEY in Vercel Environment Variables to enable cloud vision OCR, "
             "or use Search Medicine/manual text search."
         )
     if attempts and all(not a.get("text") for a in attempts):
         return (
             "No text could be extracted from the image. Try a clearer, brighter photo "
-            "or enable cloud vision OCR with ANTHROPIC_API_KEY."
+            "or enable cloud vision OCR with GEMINI_API_KEY."
         )
     return "No text could be extracted from the image."
 
 
-def _try_claude(image_bytes: bytes) -> tuple[str, int, List[dict]]:
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+def _try_gemini(image_bytes: bytes) -> tuple[str, int, List[dict]]:
+    api_key = _gemini_api_key()
     if not api_key:
-        logger.debug("ANTHROPIC_API_KEY not set; skipping vision LLM")
+        logger.debug("GEMINI_API_KEY not set; skipping vision LLM")
         return "", 0, []
 
     try:
-        import anthropic  # type: ignore
+        import requests
 
         jpeg_bytes, media_type = _img_to_jpeg_bytes(image_bytes)
         b64 = base64.standard_b64encode(jpeg_bytes).decode("utf-8")
-        model = os.environ.get("MEDICO_VISION_MODEL", "claude-3-5-haiku-latest")
-
-        client = anthropic.Anthropic(api_key=api_key)
-        message = client.messages.create(
-            model=model,
-            max_tokens=1200,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image",
-                            "source": {
-                                "type": "base64",
-                                "media_type": media_type,
-                                "data": b64,
-                            },
-                        },
-                        {
-                            "type": "text",
-                            "text": (
-                                "Transcribe this medical prescription. Preserve line breaks. "
-                                "Include medicine names, strengths, forms, and instructions. "
-                                "Do not add commentary or medical advice."
-                            ),
-                        },
-                    ],
-                }
-            ],
+        model = os.environ.get("MEDICO_VISION_MODEL", "gemini-2.5-flash")
+        endpoint = (
+            "https://generativelanguage.googleapis.com/v1beta/"
+            f"models/{model}:generateContent"
         )
-        text = message.content[0].text if message.content else ""
+        response = requests.post(
+            endpoint,
+            headers={
+                "Content-Type": "application/json",
+                "x-goog-api-key": api_key,
+            },
+            json={
+                "contents": [
+                    {
+                        "role": "user",
+                        "parts": [
+                            {
+                                "text": (
+                                    "Transcribe this medical prescription. Preserve line breaks. "
+                                    "Include medicine names, strengths, forms, and instructions. "
+                                    "Do not add commentary or medical advice."
+                                )
+                            },
+                            {
+                                "inline_data": {
+                                    "mime_type": media_type,
+                                    "data": b64,
+                                }
+                            },
+                        ],
+                    }
+                ],
+                "generationConfig": {
+                    "temperature": 0,
+                    "maxOutputTokens": 1200,
+                },
+            },
+            timeout=45,
+        )
+        response.raise_for_status()
+        data = response.json()
+        text_parts = []
+        for candidate in data.get("candidates", []):
+            content = candidate.get("content", {})
+            for part in content.get("parts", []):
+                text = part.get("text")
+                if text:
+                    text_parts.append(text)
+        text = "\n".join(text_parts)
         cleaned = _clean_text(text)
         lines = [
             {"text": line, "confidence": 95, "bbox": None, "source": "vision-llm"}
@@ -289,7 +338,7 @@ def _try_claude(image_bytes: bytes) -> tuple[str, int, List[dict]]:
         ]
         return cleaned, 95, lines
     except Exception as e:
-        logger.warning("Vision LLM failed: %s", e)
+        logger.warning("Gemini Vision failed: %s", e)
         return "", 0, []
 
 

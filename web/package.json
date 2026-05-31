@@ -9,7 +9,6 @@
     "lint": "eslint"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.100.1",
     "@heroicons/react": "^2.2.0",
     "@types/bcryptjs": "^2.4.6",
     "bcryptjs": "^3.0.3",

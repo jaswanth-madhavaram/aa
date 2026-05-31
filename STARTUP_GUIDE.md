@@ -172,7 +172,7 @@ medico-ai/
 │   │   ├── upload.py        ← POST /upload (OCR)
 │   │   └── medicines.py     ← GET /medicines/* (search)
 │   ├── services/
-│   │   ├── ocr.py           ← OCR engine (Claude Vision → Tesseract → EasyOCR)
+│   │   ├── ocr.py           ← OCR engine (Gemini Vision → Tesseract → EasyOCR)
 │   │   ├── nlp.py           ← Extract medicine names
 │   │   └── matcher.py       ← Fuzzy match & price comparison
 │   └── database/

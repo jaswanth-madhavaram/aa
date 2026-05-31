@@ -5,6 +5,16 @@ import sys, os
 from pathlib import Path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+try:
+    from dotenv import load_dotenv
+
+    _APP_ROOT = Path(__file__).resolve().parents[2]
+    _PROJECT_ROOT = Path(__file__).resolve().parents[1]
+    load_dotenv(_APP_ROOT / ".env")
+    load_dotenv(_PROJECT_ROOT / ".env")
+except Exception:
+    pass
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
@@ -13,6 +23,7 @@ from backend.database.db import init_db
 from backend.routes.auth import router as auth_router
 from backend.routes.upload import router as upload_router
 from backend.routes.medicines import router as medicines_router
+from backend.services.ocr import ocr_runtime_status
 
 app = FastAPI(
     title="Medico.AI API",
@@ -206,7 +217,7 @@ def home():
               <input id="prescriptionFile" type="file" accept="image/jpeg,image/png,image/webp,image/bmp,image/tiff" required />
               <button type="submit">Analyse Prescription</button>
             </form>
-            <p class="notice">For handwriting OCR on Vercel, set ANTHROPIC_API_KEY in your Vercel environment variables.</p>
+            <p class="notice">For handwriting OCR on Vercel, set GEMINI_API_KEY in your Vercel environment variables.</p>
           </section>
 
           <section id="results"></section>
@@ -352,13 +363,15 @@ def health():
             "status": "ok",
             "service": "Medico.AI",
             "database": "connected",
-            "medicines_in_db": medicine_count
+            "medicines_in_db": medicine_count,
+            "ocr": ocr_runtime_status(),
         }
     except Exception as e:
         return {
             "status": "error",
             "service": "Medico.AI",
             "database": "disconnected",
+            "ocr": ocr_runtime_status(),
             "error": str(e)
         }
     finally:

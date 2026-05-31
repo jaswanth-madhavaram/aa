@@ -159,7 +159,7 @@ For a diabetes patient taking Metformin daily:
 
 ### What Happens After Upload
 
-1. medico.ai sends the image to an AI model (Claude by Anthropic)
+1. medico.ai sends the image to Gemini Vision
 2. The AI reads and extracts all medicine names
 3. Each medicine is automatically searched in the database
 4. You see results for all medicines on one screen

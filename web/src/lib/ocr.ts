@@ -12,11 +12,11 @@ export async function extractTextFromImage(
   imageBytes: Buffer,
   mimeType: string
 ): Promise<OCRResult> {
-  // Try Claude Vision first if API key is available (higher quality for handwriting)
-  const apiKey = process.env.ANTHROPIC_API_KEY;
+  // Try Gemini Vision first if API key is available (higher quality for handwriting)
+  const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
   if (apiKey) {
-    const claudeResult = await tryClaudeVision(imageBytes, mimeType, apiKey);
-    if (claudeResult.text) return claudeResult;
+    const geminiResult = await tryGeminiVision(imageBytes, mimeType, apiKey);
+    if (geminiResult.text) return geminiResult;
   }
 
   // Fallback: Tesseract.js — pure JS, works everywhere including Vercel
@@ -68,57 +68,73 @@ async function tryTesseract(imageBytes: Buffer): Promise<OCRResult> {
   }
 }
 
-async function tryClaudeVision(
+async function tryGeminiVision(
   imageBytes: Buffer,
   mimeType: string,
   apiKey: string
 ): Promise<OCRResult> {
   try {
-    const { default: Anthropic } = await import("@anthropic-ai/sdk");
-    const client = new Anthropic({ apiKey });
     const b64 = imageBytes.toString("base64");
-    const mediaType = (
-      mimeType.startsWith("image/") ? mimeType : "image/jpeg"
-    ) as "image/jpeg" | "image/png" | "image/gif" | "image/webp";
-
-    const message = await client.messages.create({
-      model: process.env.MEDICO_VISION_MODEL || "claude-sonnet-4-20250514",
-      max_tokens: 1500,
-      messages: [
-        {
-          role: "user",
-          content: [
+    const mediaType = mimeType.startsWith("image/") ? mimeType : "image/jpeg";
+    const model = process.env.MEDICO_VISION_MODEL || "gemini-2.5-flash";
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": apiKey,
+        },
+        body: JSON.stringify({
+          contents: [
             {
-              type: "image",
-              source: { type: "base64", media_type: mediaType, data: b64 },
-            },
-            {
-              type: "text",
-              text: "Transcribe this medical prescription image. Extract ALL medicine names, their dosages, forms (tablet/capsule/syrup etc), and instructions. Preserve line breaks. Output ONLY the transcribed text — no commentary, no medical advice, no formatting instructions.",
+              role: "user",
+              parts: [
+                {
+                  text: "Transcribe this medical prescription image. Extract ALL medicine names, their dosages, forms (tablet/capsule/syrup etc), and instructions. Preserve line breaks. Output ONLY the transcribed text; no commentary, no medical advice, no formatting instructions.",
+                },
+                {
+                  inline_data: {
+                    mime_type: mediaType,
+                    data: b64,
+                  },
+                },
+              ],
             },
           ],
-        },
-      ],
-    });
+          generationConfig: {
+            temperature: 0,
+            maxOutputTokens: 1500,
+          },
+        }),
+      }
+    );
+    if (!res.ok) throw new Error(`Gemini OCR failed with ${res.status}`);
+    const payload = await res.json();
+    const text = (payload.candidates || [])
+      .flatMap((candidate: { content?: { parts?: { text?: string }[] } }) =>
+        candidate.content?.parts || []
+      )
+      .map((part: { text?: string }) => part.text || "")
+      .filter(Boolean)
+      .join("\n");
 
-    const text =
-      message.content[0].type === "text" ? message.content[0].text : "";
     const cleanedLines = text
       .split("\n")
-      .map((l) => l.trim())
+      .map((l: string) => l.trim())
       .filter(Boolean);
 
     return {
       text: cleanedLines.join("\n"),
-      engine: "claude-vision",
+      engine: "gemini-vision",
       confidence: 92,
-      lines: cleanedLines.map((l) => ({ text: l, confidence: 92 })),
+      lines: cleanedLines.map((l: string) => ({ text: l, confidence: 92 })),
       error: null,
     };
   } catch {
     return {
       text: "",
-      engine: "claude-vision",
+      engine: "gemini-vision",
       confidence: 0,
       lines: [],
       error: null,

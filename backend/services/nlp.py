@@ -2,7 +2,7 @@
 NLP service for prescription text.
 
 The rule-based extractor is fast and offline. If MEDICO_USE_LLM_NLP=true and
-ANTHROPIC_API_KEY is available, a text LLM can clean up ambiguous OCR output.
+GEMINI_API_KEY is available, a text LLM can clean up ambiguous OCR output.
 """
 from __future__ import annotations
 
@@ -128,33 +128,61 @@ def _rule_extract_details(text: str) -> List[Dict[str, Optional[str]]]:
 
 def _should_use_llm() -> bool:
     enabled = os.environ.get("MEDICO_USE_LLM_NLP", "").strip().lower()
-    return enabled in {"1", "true", "yes", "on"} and bool(os.environ.get("ANTHROPIC_API_KEY"))
+    return enabled in {"1", "true", "yes", "on"} and bool(_gemini_api_key())
+
+
+def _gemini_api_key() -> str:
+    return os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY", "")
 
 
 def _llm_extract_details(text: str) -> List[Dict[str, Optional[str]]]:
     try:
-        import anthropic  # type: ignore
+        import requests
 
-        model = os.environ.get("MEDICO_TEXT_MODEL", "claude-3-5-haiku-latest")
-        client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
-        message = client.messages.create(
-            model=model,
-            max_tokens=600,
-            messages=[
-                {
-                    "role": "user",
-                    "content": (
-                        "Extract only medicine entries from this OCR prescription text. "
-                        "Return strict JSON only: "
-                        "[{\"name\":\"brand or generic\",\"form\":\"tablet/capsule/etc or null\","
-                        "\"dosage\":\"strength or null\",\"source_line\":\"line from OCR\"}]. "
-                        "Ignore doctor names, diagnosis, dates, and instructions.\n\n"
-                        f"{text[:5000]}"
-                    ),
-                }
-            ],
+        model = os.environ.get("MEDICO_TEXT_MODEL", "gemini-2.5-flash")
+        endpoint = (
+            "https://generativelanguage.googleapis.com/v1beta/"
+            f"models/{model}:generateContent"
         )
-        content = message.content[0].text if message.content else "[]"
+        response = requests.post(
+            endpoint,
+            headers={
+                "Content-Type": "application/json",
+                "x-goog-api-key": _gemini_api_key(),
+            },
+            json={
+                "contents": [
+                    {
+                        "role": "user",
+                        "parts": [
+                            {
+                                "text": (
+                                    "Extract only medicine entries from this OCR prescription text. "
+                                    "Return strict JSON only: "
+                                    "[{\"name\":\"brand or generic\",\"form\":\"tablet/capsule/etc or null\","
+                                    "\"dosage\":\"strength or null\",\"source_line\":\"line from OCR\"}]. "
+                                    "Ignore doctor names, diagnosis, dates, and instructions.\n\n"
+                                    f"{text[:5000]}"
+                                )
+                            }
+                        ],
+                    }
+                ],
+                "generationConfig": {
+                    "temperature": 0,
+                    "maxOutputTokens": 600,
+                },
+            },
+            timeout=30,
+        )
+        response.raise_for_status()
+        payload_response = response.json()
+        content = "\n".join(
+            part.get("text", "")
+            for candidate in payload_response.get("candidates", [])
+            for part in candidate.get("content", {}).get("parts", [])
+            if part.get("text")
+        )
         payload = json.loads(_json_slice(content))
         if not isinstance(payload, list):
             return []
