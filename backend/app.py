@@ -2,6 +2,7 @@
 Medico.AI — FastAPI backend
 """
 import sys, os
+from pathlib import Path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from fastapi import FastAPI
@@ -29,8 +30,43 @@ app.include_router(upload_router, prefix="/api/v1", tags=["Upload & OCR"])
 app.include_router(medicines_router, prefix="/api/v1", tags=["Medicines"])
 
 
+def _frontend_html() -> str:
+    frontend_file = Path(__file__).resolve().parents[1] / "frontend" / "app.py"
+    try:
+        source = frontend_file.read_text(encoding="utf-8")
+        start_marker = 'html_app = dedent(\n    f"""'
+        end_marker = '    """\n)\n\ncomponents.html'
+        start = source.index(start_marker) + len(start_marker)
+        end = source.index(end_marker, start)
+        template = source[start:end]
+        template = template.replace("{API_BASE}", "/api/v1")
+        template = template.replace("{HEALTH_URL}", "/health")
+        template = template.replace("{{", "{").replace("}}", "}")
+        return template.strip()
+    except Exception as exc:
+        return f"""
+        <!doctype html>
+        <html lang="en">
+          <head>
+            <meta charset="utf-8" />
+            <meta name="viewport" content="width=device-width, initial-scale=1" />
+            <title>Medico.AI</title>
+          </head>
+          <body>
+            <main style="font-family:Arial,sans-serif;max-width:720px;margin:64px auto;line-height:1.5">
+              <h1>Medico.AI</h1>
+              <p>The API is running, but the frontend template could not be loaded.</p>
+              <p>Error: {exc}</p>
+              <p><a href="/docs">Open API Docs</a></p>
+            </main>
+          </body>
+        </html>
+        """
+
+
 @app.get("/", response_class=HTMLResponse, include_in_schema=False)
 def home():
+    return _frontend_html()
     return """
     <!doctype html>
     <html lang="en">
