@@ -123,9 +123,16 @@ _CANDIDATE_STOPWORDS = {
     "daily",
     "doctor",
     "food",
+    "govt",
+    "jipmer",
+    "mbbs",
+    "md",
+    "medical",
     "morning",
     "night",
     "patient",
+    "paediatrics",
+    "pediatrics",
     "tablet",
     "tablets",
     "take",
@@ -140,7 +147,13 @@ def _fallback_candidates_from_ocr(text: str, limit: int = 24) -> List[str]:
         line = re.sub(r"\s+", " ", raw_line).strip()
         if len(line) < 3:
             continue
-        if re.search(r"\b(?:doctor|hospital|clinic|patient|age|sex|date|phone|mobile)\b", line, re.I):
+        if re.search(
+            r"\b(?:doctor|hospital|clinic|patient|age|sex|date|phone|mobile|"
+            r"mbbs|m\.?d\.?|paediatrics?|pediatrics?|medical\s+college|"
+            r"govt\.?|jipmer|chc)\b",
+            line,
+            re.I,
+        ):
             continue
 
         working = re.sub(r"^\s*(?:rx|r/|\d+[\).:-]?|[-*])\s*", " ", line, flags=re.I)
@@ -180,8 +193,16 @@ def _fallback_candidates_from_ocr(text: str, limit: int = 24) -> List[str]:
     return candidates
 
 
-def _successful_matches(matches: List[MedicineMatch]) -> List[MedicineMatch]:
-    return [m for m in matches if m.match_type != "none" and not m.error]
+def _successful_matches(
+    matches: List[MedicineMatch],
+    *,
+    allow_web: bool = True,
+) -> List[MedicineMatch]:
+    return [
+        m
+        for m in matches
+        if m.match_type != "none" and not m.error and (allow_web or m.match_type != "web")
+    ]
 
 
 def _details_from_matches(matches: List[MedicineMatch]) -> List[dict]:
@@ -243,7 +264,7 @@ async def upload_prescription(
     if not _successful_matches(matches):
         fallback_candidates = _fallback_candidates_from_ocr(raw_text)
         fallback_matches = bulk_find_alternatives(fallback_candidates, db)
-        successful = _successful_matches(fallback_matches)
+        successful = _successful_matches(fallback_matches, allow_web=False)
         if successful:
             matches = successful
             medicine_details = _details_from_matches(successful)
@@ -287,7 +308,7 @@ async def search_by_text(
     if not _successful_matches(matches):
         fallback_candidates = _fallback_candidates_from_ocr(prescription_text)
         fallback_matches = bulk_find_alternatives(fallback_candidates, db)
-        successful = _successful_matches(fallback_matches)
+        successful = _successful_matches(fallback_matches, allow_web=False)
         if successful:
             matches = successful
             medicine_details = _details_from_matches(successful)

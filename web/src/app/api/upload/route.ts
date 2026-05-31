@@ -14,9 +14,16 @@ const CANDIDATE_STOPWORDS = new Set([
   "daily",
   "doctor",
   "food",
+  "govt",
+  "jipmer",
+  "mbbs",
+  "md",
+  "medical",
   "morning",
   "night",
   "patient",
+  "paediatrics",
+  "pediatrics",
   "tablet",
   "tablets",
   "take",
@@ -29,7 +36,11 @@ function fallbackCandidatesFromOcr(text: string, limit = 24): string[] {
   for (const rawLine of text.replace(/\r/g, "\n").split("\n")) {
     const line = rawLine.replace(/\s+/g, " ").trim();
     if (line.length < 3) continue;
-    if (/\b(?:doctor|hospital|clinic|patient|age|sex|date|phone|mobile)\b/i.test(line)) {
+    if (
+      /\b(?:doctor|hospital|clinic|patient|age|sex|date|phone|mobile|mbbs|m\.?d\.?|paediatrics?|pediatrics?|medical\s+college|govt\.?|jipmer|chc)\b/i.test(
+        line
+      )
+    ) {
       continue;
     }
 

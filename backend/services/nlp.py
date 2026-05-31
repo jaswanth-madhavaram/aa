@@ -14,8 +14,6 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from backend.services.web_medicine import lookup_web_medicine
-
 logger = logging.getLogger(__name__)
 
 _BEFORE_KW = re.compile(
@@ -46,14 +44,16 @@ _FREQUENCY_PATTERN = re.compile(
 _SKIP_LINE_PATTERN = re.compile(
     r"\b(?:date|age|a/?g/e|sex|gender|name|address|phone|mobile|mob|tel|contact|"
     r"dr\.?|doctor|hospital|clinic|patient|diagnosis|weight|height|bp|blood|"
-    r"pressure|signature|follow|review|page|reg(?:istration)?|uhid|invoice|bill)\b",
+    r"pressure|signature|follow|review|page|reg(?:istration)?|uhid|invoice|bill|"
+    r"mbbs|m\.?d\.?|paediatrics?|pediatrics?|medical\s+college|govt\.?|jipmer|chc)\b",
     re.IGNORECASE,
 )
 _BAD_TOKEN_PATTERN = re.compile(
     r"^(?:rx|tab|tablet|cap|capsule|syp|syrup|inj|injection|take|after|before|"
     r"daily|night|morning|days|food|dose|no|nil|signature|phone|mobile|age|ahge|"
     r"name|patient|doctor|clinic|hospital|male|female|years?|yrs?|month|months?|"
-    r"susp|suspension|solution|drops?|cream|gel|spray|lotion|powder)$",
+    r"susp|suspension|solution|drops?|cream|gel|spray|lotion|powder|mbbs|md|"
+    r"paediatrics?|pediatrics?|medical|college|govt|jipmer|chc)$",
     re.IGNORECASE,
 )
 _MEDICINE_CANDIDATE = re.compile(r"^[A-Za-z][A-Za-z0-9+-]{2,34}$")
@@ -309,19 +309,11 @@ def _correct_to_known_medicine(token: str, require_strong: bool = True) -> Optio
         cutoff = 88 if require_strong else 80
         match = process.extractOne(token, choices, scorer=fuzz.WRatio, score_cutoff=cutoff)
         if not match:
-            return _correct_to_web_medicine(token)
+            return None
         name, score, _ = match
         return name, int(score)
     except Exception:
-        return _correct_to_web_medicine(token)
-
-
-@lru_cache(maxsize=512)
-def _correct_to_web_medicine(token: str) -> Optional[tuple[str, int]]:
-    web = lookup_web_medicine(token, timeout=2.5)
-    if not web:
         return None
-    return web.name, 70
 
 
 def _extract_form(line: str) -> Optional[str]:

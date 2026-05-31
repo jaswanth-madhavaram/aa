@@ -6,9 +6,9 @@ const FORM_PATTERN =
 const DOSAGE_PATTERN =
   /\b\d+(?:\.\d+)?\s*(?:mg|mcg|ml|mL|g|iu|IU|units?|%)\b/i;
 const SKIP_LINE =
-  /\b(?:date|age|sex|gender|name|address|phone|mobile|dr\.?|doctor|hospital|clinic|patient|diagnosis|weight|height|bp|blood|pressure|signature|follow|review|page|reg(?:istration)?|invoice|bill)\b/i;
+  /\b(?:date|age|sex|gender|name|address|phone|mobile|dr\.?|doctor|hospital|clinic|patient|diagnosis|weight|height|bp|blood|pressure|signature|follow|review|page|reg(?:istration)?|invoice|bill|mbbs|m\.?d\.?|paediatrics?|pediatrics?|medical\s+college|govt\.?|jipmer|chc)\b/i;
 const BAD_TOKEN =
-  /^(?:tab|tablet|cap|capsule|syp|syrup|inj|injection|take|after|before|daily|night|morning|days|food|dose|no|nil|signature|phone|mobile|age|name|patient|doctor|clinic|hospital|male|female|years?|yrs?|months?|susp|suspension|solution|drops?|cream|gel|spray|lotion|powder|rx|the|and|for|with|per|once|twice|your)$/i;
+  /^(?:tab|tablet|cap|capsule|syp|syrup|inj|injection|take|after|before|daily|night|morning|days|food|dose|no|nil|signature|phone|mobile|age|name|patient|doctor|clinic|hospital|male|female|years?|yrs?|months?|susp|suspension|solution|drops?|cream|gel|spray|lotion|powder|rx|the|and|for|with|per|once|twice|your|mbbs|md|paediatrics?|pediatrics?|medical|college|govt|jipmer|chc)$/i;
 
 export interface MedicineDetail {
   name: string;
