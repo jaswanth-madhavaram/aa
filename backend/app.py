@@ -39,9 +39,9 @@ def _frontend_html() -> str:
         start = source.index(start_marker) + len(start_marker)
         end = source.index(end_marker, start)
         template = source[start:end]
-        template = template.replace("{API_BASE}", "/api/v1")
-        template = template.replace("{HEALTH_URL}", "/health")
         template = template.replace("{{", "{").replace("}}", "}")
+        template = template.replace('"{API_BASE}"', '"/api/v1"')
+        template = template.replace('"{HEALTH_URL}"', '"/health"')
         return template.strip()
     except Exception as exc:
         return f"""
