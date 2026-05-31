@@ -75,6 +75,7 @@ def find_alternatives(medicine_name: str, db: Session, top_n: int = 5) -> Medici
         result.match_type = "exact"
         result.fuzzy_score = 100
         result.alternatives = _get_alternatives_by_salt(exact, db, top_n)
+        _append_web_alternative(result, medicine_name)
         return result
 
     # 2. Fuzzy brand match
@@ -99,6 +100,7 @@ def find_alternatives(medicine_name: str, db: Session, top_n: int = 5) -> Medici
             result.match_type = "fuzzy"
             result.fuzzy_score = int(score)
             result.alternatives = _get_alternatives_by_salt(db_med, db, top_n)
+            _append_web_alternative(result, medicine_name)
             return result
 
     # 3. Fuzzy generic/salt name match
@@ -125,6 +127,7 @@ def find_alternatives(medicine_name: str, db: Session, top_n: int = 5) -> Medici
             result.match_type = "salt"
             result.fuzzy_score = int(score)
             result.alternatives = _get_alternatives_by_salt(db_med, db, top_n)
+            _append_web_alternative(result, medicine_name)
             return result
 
     result.error = f"No match found for '{medicine_name}'"
@@ -166,6 +169,25 @@ def _find_web_info(medicine_name: str) -> MedicineMatch | None:
         )
     ]
     return result
+
+
+def _append_web_alternative(result: MedicineMatch, medicine_name: str) -> None:
+    web_match = _find_web_info(medicine_name)
+    if not web_match or not web_match.alternatives:
+        return
+
+    existing = {alt.brand_name.lower() for alt in result.alternatives}
+    for alt in web_match.alternatives:
+        key = alt.brand_name.lower()
+        if key in existing:
+            continue
+        alt.source = alt.source or "web"
+        alt.price_available = False
+        result.alternatives.append(alt)
+        existing.add(key)
+
+    if result.match_type != "web":
+        result.error = None
 
 
 def _get_alternatives_by_salt(

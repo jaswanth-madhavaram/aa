@@ -219,8 +219,24 @@ def extract_text_from_image(image_bytes: bytes, engine: str = "auto") -> dict:
         )
         return result
 
-    result["error"] = "No text could be extracted from the image."
+    result["error"] = _ocr_failure_message(attempts)
     return result
+
+
+def _ocr_failure_message(attempts: List[Dict[str, Any]]) -> str:
+    if os.getenv("VERCEL") and not os.environ.get("ANTHROPIC_API_KEY"):
+        return (
+            "No text could be extracted from the image. On Vercel, local OCR engines "
+            "like Tesseract/EasyOCR are not available in this deployment. Add "
+            "ANTHROPIC_API_KEY in Vercel Environment Variables to enable cloud vision OCR, "
+            "or use Search Medicine/manual text search."
+        )
+    if attempts and all(not a.get("text") for a in attempts):
+        return (
+            "No text could be extracted from the image. Try a clearer, brighter photo "
+            "or enable cloud vision OCR with ANTHROPIC_API_KEY."
+        )
+    return "No text could be extracted from the image."
 
 
 def _try_claude(image_bytes: bytes) -> tuple[str, int, List[dict]]:

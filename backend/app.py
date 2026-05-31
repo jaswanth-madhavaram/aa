@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 
 from backend.database.db import init_db
+from backend.routes.auth import router as auth_router
 from backend.routes.upload import router as upload_router
 from backend.routes.medicines import router as medicines_router
 
@@ -28,6 +29,7 @@ app.add_middleware(
 
 app.include_router(upload_router, prefix="/api/v1", tags=["Upload & OCR"])
 app.include_router(medicines_router, prefix="/api/v1", tags=["Medicines"])
+app.include_router(auth_router, prefix="/api/v1", tags=["Auth"])
 
 
 def _frontend_html() -> str:

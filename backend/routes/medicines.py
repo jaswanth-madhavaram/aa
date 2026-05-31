@@ -53,6 +53,7 @@ class SingleSearchResponse(BaseModel):
     matched_brand: Optional[str]
     salt_composition: Optional[str]
     match_type: str
+    fuzzy_score: int
     alternatives: List[AlternativeOut]
     error: Optional[str]
 
@@ -131,6 +132,7 @@ def search_medicine(
         matched_brand=match.matched_brand,
         salt_composition=match.salt_composition,
         match_type=match.match_type,
+        fuzzy_score=match.fuzzy_score,
         alternatives=alts,
         error=match.error,
     )

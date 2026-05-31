@@ -144,6 +144,50 @@ html_app = dedent(
       }}
       .dot {{ width: 8px; height: 8px; border-radius: 50%; background: var(--green); animation: pulse 1.8s infinite; }}
       @keyframes pulse {{ 0%,100%{{opacity:1}} 50%{{opacity:0.4}} }}
+      .auth-actions {{ display:flex; gap:8px; align-items:center; flex-wrap:wrap; }}
+      .auth-btn {{
+        border:2px solid var(--green);
+        background:white;
+        color:var(--green-dark);
+        padding:7px 12px;
+        border-radius:10px;
+        font-family:'Nunito',sans-serif;
+        font-weight:800;
+        cursor:pointer;
+      }}
+      .auth-btn.primary {{ background:var(--green); color:white; }}
+      .auth-user {{ color:var(--green-dark); font-weight:800; font-family:'Nunito',sans-serif; }}
+      .modal {{
+        position:fixed; inset:0; z-index:999;
+        display:none; place-items:center;
+        background:rgba(15,23,42,0.55);
+        padding:20px;
+      }}
+      .modal.active {{ display:grid; }}
+      .auth-card {{
+        width:min(420px,100%);
+        background:white;
+        border-radius:18px;
+        padding:24px;
+        box-shadow:0 24px 80px rgba(0,0,0,0.25);
+      }}
+      .auth-card h2 {{ font-family:'Nunito',sans-serif; font-weight:900; margin-bottom:8px; }}
+      .auth-card input {{
+        width:100%;
+        border:2px solid var(--border);
+        border-radius:12px;
+        padding:12px 14px;
+        margin:8px 0;
+        font:inherit;
+      }}
+      .auth-row {{ display:flex; gap:10px; margin-top:12px; }}
+      .auth-row button {{ flex:1; }}
+      .source-note {{
+        margin:10px 24px 0;
+        color:var(--muted);
+        font-size:0.86rem;
+        font-weight:700;
+      }}
 
       .hero {{
         background: linear-gradient(135deg, #0f4c35 0%, #1a7a4f 50%, #1DB954 100%);
