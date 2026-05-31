@@ -460,6 +460,61 @@ html_app = dedent(
       }}
       .btn-upload:hover {{ transform: translateY(-2px); }}
       input[type=file] {{ margin: 14px 0; }}
+      .scan-panel {{
+        display: grid;
+        grid-template-columns: minmax(220px, 0.9fr) minmax(260px, 1.1fr);
+        gap: 18px;
+        align-items: start;
+        margin: 18px 0 24px;
+      }}
+      .preview-box, .scan-detail-box {{
+        background: white;
+        border: 2px solid var(--border);
+        border-radius: var(--radius);
+        box-shadow: var(--shadow);
+        overflow: hidden;
+      }}
+      .preview-box img {{
+        width: 100%;
+        max-height: 460px;
+        object-fit: contain;
+        background: #f3f4f6;
+        display: block;
+      }}
+      .preview-empty {{
+        padding: 34px 18px;
+        color: var(--muted);
+        font-weight: 700;
+        text-align: center;
+      }}
+      .scan-detail-box {{ padding: 18px; }}
+      .pill-list {{ display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }}
+      .med-pill {{
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 7px 10px;
+        border-radius: 99px;
+        background: var(--green-light);
+        border: 1.5px solid var(--green);
+        color: var(--green-dark);
+        font-family: 'Nunito', sans-serif;
+        font-weight: 800;
+        font-size: 0.88rem;
+      }}
+      .scan-lines {{
+        margin-top: 12px;
+        max-height: 220px;
+        overflow: auto;
+        border-top: 1px solid var(--border);
+      }}
+      .scan-line {{
+        padding: 9px 0;
+        border-bottom: 1px solid var(--border);
+        color: var(--muted);
+        font-size: 0.9rem;
+      }}
+      .scan-line strong {{ color: var(--text); }}
       textarea {{
         width: 100%;
         min-height: 160px;
@@ -531,6 +586,7 @@ html_app = dedent(
         .nav-links {{ flex-wrap: wrap; }}
         .search-box {{ flex-direction: column; align-items: stretch; }}
         .summary-cards {{ grid-template-columns: 1fr; }}
+        .scan-panel {{ grid-template-columns: 1fr; }}
       }}
     </style>
     </head>
@@ -611,6 +667,15 @@ html_app = dedent(
           <br>
           <button class="btn-upload" onclick="uploadPrescription()">📷 Analyse Prescription</button>
           <p style="margin-top:14px;font-size:0.82rem;color:#aaa">Supports JPG, PNG, WebP, BMP, TIFF · Max 10MB</p>
+        </div>
+        <div class="scan-panel">
+          <div class="preview-box" id="previewBox">
+            <div class="preview-empty">Selected prescription image will appear here</div>
+          </div>
+          <div class="scan-detail-box" id="scanDetails">
+            <div class="section-title" style="margin-bottom:8px">Scan Details</div>
+            <p style="color:var(--muted);font-weight:600">Choose an image, then run analysis to see detected medicine names and OCR confidence.</p>
+          </div>
         </div>
         <div id="uploadResults"></div>
         <div class="disclaimer">
@@ -694,10 +759,11 @@ html_app = dedent(
 
       function summaryHtml(results) {{
         const found = results.filter(r => r.match_type !== 'none' && !r.error);
+        const priced = found.filter(r => (r.alternatives || []).some(a => a.price_available !== false));
         let original = 0;
         let cheapest = 0;
-        found.forEach(r => {{
-          const alts = r.alternatives || [];
+        priced.forEach(r => {{
+          const alts = (r.alternatives || []).filter(a => a.price_available !== false);
           if (!alts.length) return;
           cheapest += Number(alts[0].brand_price || 0);
           const matched = alts.find(a => String(a.brand_name).toLowerCase() === String(r.matched_brand || '').toLowerCase());
@@ -718,7 +784,22 @@ html_app = dedent(
         if (match.match_type === 'exact') return '<span class="badge badge-green">✅ Exact Match</span>';
         if (match.match_type === 'fuzzy') return `<span class="badge badge-orange">~ Fuzzy (${{match.fuzzy_score || 0}}%)</span>`;
         if (match.match_type === 'salt') return '<span class="badge badge-orange">~ Generic Match</span>';
+        if (match.match_type === 'web') return '<span class="badge badge-orange">Web Source</span>';
         return '<span class="badge badge-muted">Matched</span>';
+      }}
+
+      function webSourceHtml(alt) {{
+        const urls = (alt.source_urls || []).slice(0, 3);
+        const links = urls.map((url, i) => `<a href="${{esc(url)}}" target="_blank" rel="noopener" style="color:white;text-decoration:underline">Source ${{i + 1}}</a>`).join(' · ');
+        return `
+          <div class="cheapest-banner" style="background:linear-gradient(90deg,#2563EB,#1e40af)">
+            <div class="cheapest-icon">🌐</div>
+            <div class="cheapest-text">
+              <div class="title">Web info from ${{esc(alt.source || 'public drug databases')}}</div>
+              <div class="sub">Generic: ${{esc(alt.generic_name || 'N/A')}} · Form: ${{esc(alt.form || alt.unit_type || 'N/A')}} · Strength: ${{esc(alt.strength || 'N/A')}}</div>
+              <div class="sub">Prices are unavailable from this source. ${{links}}</div>
+            </div>
+          </div>`;
       }}
 
       function resultsHtml(results) {{
@@ -729,7 +810,46 @@ html_app = dedent(
         let html = summaryHtml(results);
         found.forEach(r => {{
           const alts = r.alternatives || [];
+          if (r.match_type === 'web') {{
+            const alt = alts[0] || {{}};
+            html += `
+            <div class="result-card">
+              <div class="result-header">
+                <div class="medicine-name">💊 ${{esc(r.matched_brand || r.query)}} ${{badgeFor(r)}}</div>
+              </div>
+              <div class="composition">🧪 Composition: <span>${{esc(r.salt_composition || alt.generic_name || '')}}</span></div>
+              <div class="options-wrap">
+                <table>
+                  <thead>
+                    <tr><th>Name</th><th>Generic</th><th>Manufacturer / Source</th><th>Form</th><th>Price</th></tr>
+                  </thead>
+                  <tbody>
+                    <tr class="best-row">
+                      <td><div class="option-name">${{esc(alt.brand_name || r.matched_brand || r.query)}}</div></td>
+                      <td>${{esc(alt.generic_name || '')}}</td>
+                      <td>${{esc(alt.manufacturer || alt.source || '')}}</td>
+                      <td>${{esc((alt.strength || '') + ' ' + (alt.form || alt.unit_type || ''))}}</td>
+                      <td><span class="badge badge-muted">Unavailable</span></td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              ${{webSourceHtml(alt)}}
+            </div>`;
+            return;
+          }}
           const rows = alts.map((a, index) => {{
+            if (a.price_available === false) {{
+              return `
+              <tr>
+                <td><div class="option-name">${{esc(a.brand_name)}}</div><span class="badge badge-orange">Web Source</span></td>
+                <td>${{esc(a.generic_name)}}</td>
+                <td>${{esc(a.manufacturer || a.source || '')}}</td>
+                <td>${{esc((a.strength || '') + ' ' + (a.form || ''))}}</td>
+                <td><span class="badge badge-muted">Unavailable</span></td>
+                <td><span class="badge badge-muted">N/A</span></td>
+              </tr>`;
+            }}
             const best = index === 0 ? '<span class="star-badge">⭐ Best Value</span>' : '';
             const priceClass = index === 0 ? 'price-generic' : 'price-branded';
             const save = Number(a.savings_pct || 0) > 0
@@ -822,6 +942,36 @@ html_app = dedent(
         searchMedicine(val, 'searchPageResults');
       }}
 
+      function medicineDetailsHtml(details) {{
+        const meds = details && details.length ? details : [];
+        if (!meds.length) {{
+          return '<p style="color:var(--muted);font-weight:600">No medicine names detected yet.</p>';
+        }}
+        return `<div class="pill-list">${{meds.map(m => {{
+          const extra = [m.form, m.dosage].filter(Boolean).join(' ');
+          return `<span class="med-pill">💊 ${{esc(m.name || m)}}${{extra ? ` <small>${{esc(extra)}}</small>` : ''}}</span>`;
+        }}).join('')}}</div>`;
+      }}
+
+      function scanDetailsHtml(data) {{
+        const lines = (data.ocr_lines || []).slice(0, 12).map(line => `
+          <div class="scan-line">
+            <strong>${{Number(line.confidence || 0)}}%</strong>
+            ${{esc(line.text || '')}}
+          </div>
+        `).join('');
+        const steps = (data.ocr_processing_steps || []).slice(0, 5).map(esc).join(' · ');
+        return `
+          <div class="section-title" style="margin-bottom:8px">Detected Medicines (${{data.total_medicines_found || 0}})</div>
+          ${{medicineDetailsHtml(data.extracted_medicine_details || [])}}
+          <div style="margin-top:16px;color:var(--muted);font-weight:700;font-size:0.92rem">
+            OCR: ${{esc(data.ocr_engine || 'none')}} · Confidence: ${{Number(data.ocr_confidence || 0)}}%
+          </div>
+          ${{steps ? `<div style="margin-top:6px;color:var(--muted);font-size:0.82rem">Passes: ${{steps}}</div>` : ''}}
+          ${{lines ? `<div class="scan-lines">${{lines}}</div>` : ''}}
+        `;
+      }}
+
       async function uploadPrescription() {{
         const fileInput = document.getElementById('prescriptionFile');
         const target = document.getElementById('uploadResults');
@@ -834,9 +984,22 @@ html_app = dedent(
         form.append('ocr_engine', 'auto');
         target.innerHTML = '<div class="loading">Running OCR and AI analysis...</div>';
         try {{
+          try {{
+            await fetch(HEALTH_URL, {{ cache: 'no-store' }});
+          }} catch (healthErr) {{
+            throw new Error('Backend is not reachable. Start FastAPI on port 8000 and try again.');
+          }}
           const res = await fetch(`${{API_BASE}}/upload`, {{ method: 'POST', body: form }});
-          if (!res.ok) throw new Error(await res.text());
+          if (!res.ok) {{
+            let message = await res.text();
+            try {{
+              const parsed = JSON.parse(message);
+              message = parsed.detail || message;
+            }} catch (parseErr) {{}}
+            throw new Error(message);
+          }}
           const data = await res.json();
+          document.getElementById('scanDetails').innerHTML = scanDetailsHtml(data);
           target.innerHTML = `
             <div class="result-card" style="padding:20px">
               <div class="section-title">📄 Raw OCR Text</div>
@@ -844,7 +1007,7 @@ html_app = dedent(
             </div>
           ` + resultsHtml(data.results || []);
         }} catch (err) {{
-          target.innerHTML = `<div class="error-msg">Upload failed: ${{esc(err.message)}}</div>`;
+          target.innerHTML = `<div class="error-msg">Upload failed: ${{esc(err.message || 'Cannot reach backend. Please refresh and try again.')}}</div>`;
         }}
       }}
 
@@ -918,6 +1081,22 @@ html_app = dedent(
       }});
       document.getElementById('searchPageInput').addEventListener('keydown', e => {{
         if (e.key === 'Enter') searchStandalone();
+      }});
+      document.getElementById('prescriptionFile').addEventListener('change', e => {{
+        const file = e.target.files && e.target.files[0];
+        const preview = document.getElementById('previewBox');
+        const details = document.getElementById('scanDetails');
+        if (!file) {{
+          preview.innerHTML = '<div class="preview-empty">Selected prescription image will appear here</div>';
+          return;
+        }}
+        const url = URL.createObjectURL(file);
+        preview.innerHTML = `<img src="${{url}}" alt="Selected prescription image">`;
+        details.innerHTML = `
+          <div class="section-title" style="margin-bottom:8px">Ready to Scan</div>
+          <p style="color:var(--muted);font-weight:700">${{esc(file.name)}} · ${{(file.size / 1024).toFixed(1)}} KB</p>
+          <p style="color:var(--muted);font-weight:600;margin-top:8px">Click Analyse Prescription to extract medicine names from this image.</p>
+        `;
       }});
 
       updateStatus();

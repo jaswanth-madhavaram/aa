@@ -12,6 +12,7 @@ from rapidfuzz import fuzz, process  # type: ignore
 from sqlalchemy.orm import Session
 
 from backend.database.db import Medicine
+from backend.services.web_medicine import lookup_web_medicine
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +35,9 @@ class AlternativeResult:
     savings_vs_brand: float = 0.0
     savings_pct: float = 0.0
     match_score: int = 100
+    source: str = "local_csv"
+    source_urls: List[str] = field(default_factory=list)
+    price_available: bool = True
 
 
 @dataclass
@@ -124,6 +128,43 @@ def find_alternatives(medicine_name: str, db: Session, top_n: int = 5) -> Medici
             return result
 
     result.error = f"No match found for '{medicine_name}'"
+    web_match = _find_web_info(medicine_name)
+    if web_match:
+        return web_match
+    return result
+
+
+def _find_web_info(medicine_name: str) -> MedicineMatch | None:
+    web = lookup_web_medicine(medicine_name)
+    if not web:
+        return None
+
+    result = MedicineMatch(query=medicine_name)
+    result.matched_brand = web.name
+    result.salt_composition = web.salt_composition or web.generic_name
+    result.match_type = "web"
+    result.fuzzy_score = 0
+    result.error = None
+    result.alternatives = [
+        AlternativeResult(
+            brand_name=web.name,
+            generic_name=web.generic_name or web.name,
+            salt_composition=web.salt_composition or web.generic_name or web.name,
+            manufacturer=web.manufacturer or web.source,
+            brand_price=0.0,
+            generic_price=0.0,
+            jan_aushadhi_price=None,
+            unit_type=web.form or "unknown",
+            category=web.category or "Web lookup",
+            strength=web.strength or "",
+            form=web.form or "",
+            savings_vs_brand=0.0,
+            savings_pct=0.0,
+            source=web.source,
+            source_urls=web.source_urls,
+            price_available=False,
+        )
+    ]
     return result
 
 

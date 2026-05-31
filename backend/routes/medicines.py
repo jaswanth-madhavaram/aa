@@ -6,7 +6,7 @@ from __future__ import annotations
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, Query, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from backend.database.db import get_db, Medicine
 from backend.services.matcher import find_alternatives, AlternativeResult
@@ -43,6 +43,9 @@ class AlternativeOut(BaseModel):
     form: str
     savings_vs_brand: float
     savings_pct: float
+    source: str = "local_csv"
+    source_urls: List[str] = Field(default_factory=list)
+    price_available: bool = True
 
 
 class SingleSearchResponse(BaseModel):
@@ -117,6 +120,9 @@ def search_medicine(
             form=a.form,
             savings_vs_brand=a.savings_vs_brand,
             savings_pct=a.savings_pct,
+            source=a.source,
+            source_urls=a.source_urls,
+            price_available=a.price_available,
         )
         for a in match.alternatives
     ]
